@@ -94,9 +94,10 @@ npm run test:watch
 - Message passing includes progress tracking
 
 ### Supported Models
-- GPT-4 (128k): Uses cl100k_base tokenizer
-- Claude 3 Opus/Sonnet (200k): Claude tokenizer adapter
-- Gemini 1.5 Pro (1M): Gemini tokenizer adapter
+- GPT-5 (400k): Uses o200k_base tokenizer for accurate counts
+- Claude Opus 4.1 (200k): Claude tokenizer adapter
+- Claude Sonnet 4 (200k/1M beta): Claude tokenizer adapter
+- Gemini 2.5 Pro (1M): Gemini tokenizer adapter
 
 ## Security Measures
 - DTDs and processing instructions removed from XML
