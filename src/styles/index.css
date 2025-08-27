@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-text: #1a1a1a;
+    --color-background: #ffffff;
+    --color-border: #e5e7eb;
+    --color-primary: #0173B2;
+    --color-secondary: #DE8F05;
+  }
+
+  [data-theme="dark"] {
+    --color-text: #f5f5f5;
+    --color-background: #0a0a0a;
+    --color-border: #27272a;
+    --color-primary: #3b82f6;
+    --color-secondary: #f59e0b;
+  }
+
+  [data-theme="high-contrast"] {
+    --color-text: #000000;
+    --color-background: #ffffff;
+    --color-border: #000000;
+    --color-primary: #0000ff;
+    --color-secondary: #ff6600;
+  }
+
+  body {
+    color: var(--color-text);
+    background-color: var(--color-background);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+  }
+
+  .button-primary {
+    @apply px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors focus-ring;
+  }
+
+  .button-secondary {
+    @apply px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors focus-ring;
+  }
+
+  .svg-arc {
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+  }
+
+  .svg-arc:hover {
+    opacity: 0.8;
+  }
+
+  .breadcrumb-item {
+    @apply inline-flex items-center px-2 py-1 text-sm font-medium rounded-md hover:bg-gray-100 focus-ring;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .animate-blossom {
+    animation: blossom 0.3s ease-out;
+  }
+}
