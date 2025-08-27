@@ -4,6 +4,10 @@ DaisyPrompt is a client-only React app that parses XML prompts, tokenizes conten
 
 Workflow: input → parse → tokenize → transform → visualize
 
+![](assets/cover1.png)
+![](assets/cover2.png)
+
+
 ## Features
 
 - XML parsing in a Web Worker (fast-xml-parser + saxes streaming fallback)
