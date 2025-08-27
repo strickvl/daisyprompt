@@ -110,7 +110,7 @@ const initialPerformanceConfig: PerformanceConfig = {
 
 const initialState = {
   rawXML: '',
-  modelId: 'gpt-4-128k' as ModelId,
+  modelId: 'gpt-5-400k' as ModelId,
   sizeBasis: 'tokens' as SizeBasis,
   viewMode: 'absolute' as ViewMode,
   visualizationType: 'sunburst' as VisualizationType,

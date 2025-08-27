@@ -3,8 +3,9 @@ import type { ModelConfig, ModelId } from '@/types/models';
 // Use lite build for browsers
 import { Tiktoken } from '@dqbd/tiktoken/lite';
 import cl100k_base from '@dqbd/tiktoken/encoders/cl100k_base.json';
+import o200k_base from '@dqbd/tiktoken/encoders/o200k_base.json';
 
-type Cl100kData = {
+type TiktokenData = {
   // bpe_ranks is base64 encoded string in the JSON
   bpe_ranks: string;
   special_tokens: Record<string, number>;
@@ -98,12 +99,12 @@ abstract class BaseAdapter implements TokenizerAdapter {
 /**
  * Tiktoken adapter for cl100k_base (OpenAI GPT-4/3.5 family).
  */
-class TiktokenAdapter extends BaseAdapter {
+class Cl100kAdapter extends BaseAdapter {
   private encoder?: Tiktoken;
 
   ensureReady(): void {
     if (!this.encoder) {
-      const raw = cl100k_base as unknown as Cl100kData;
+      const raw = cl100k_base as unknown as TiktokenData;
       this.encoder = new Tiktoken(raw.bpe_ranks, raw.special_tokens, raw.pat_str);
     }
   }
@@ -111,6 +112,25 @@ class TiktokenAdapter extends BaseAdapter {
   encodeCount(text: string): number {
     if (!this.encoder) this.ensureReady();
     // encode_single_token_bytes not exposed in lite; standard encode is fine
+    return this.encoder!.encode(text).length;
+  }
+}
+
+/**
+ * Tiktoken adapter for o200k_base (OpenAI GPT-5/O-family).
+ */
+class O200kAdapter extends BaseAdapter {
+  private encoder?: Tiktoken;
+
+  ensureReady(): void {
+    if (!this.encoder) {
+      const raw = o200k_base as unknown as TiktokenData;
+      this.encoder = new Tiktoken(raw.bpe_ranks, raw.special_tokens, raw.pat_str);
+    }
+  }
+
+  encodeCount(text: string): number {
+    if (!this.encoder) this.ensureReady();
     return this.encoder!.encode(text).length;
   }
 }
@@ -144,7 +164,10 @@ export function getTokenizerAdapter(type: TokenizerType): TokenizerAdapter {
   let adapter: TokenizerAdapter;
   switch (type) {
     case 'cl100k_base':
-      adapter = new TiktokenAdapter();
+      adapter = new Cl100kAdapter();
+      break;
+    case 'o200k_base':
+      adapter = new O200kAdapter();
       break;
     case 'claude':
     case 'gemini':

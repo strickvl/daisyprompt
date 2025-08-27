@@ -20,7 +20,7 @@ export function SunburstChart({
   data,
   sizeBasis,
   viewMode = 'relative',
-  modelId = 'gpt-4-128k',
+  modelId = 'gpt-5-400k',
   className,
   style,
   onNodeClick,

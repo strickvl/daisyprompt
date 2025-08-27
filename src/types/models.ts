@@ -41,34 +41,47 @@ export interface ModelConfig {
   id: ModelId;
   name: string;
   contextLimit: number;
-  tokenizerType: 'cl100k_base' | 'claude' | 'gemini' | 'custom';
+  tokenizerType: 'cl100k_base' | 'o200k_base' | 'claude' | 'gemini' | 'custom';
   overheadTokens?: number; // System/tool wrapper overhead
 }
 
-// Predefined models from the design document
+// Current generation models with accurate context limits
 export const MODELS: Record<ModelId, ModelConfig> = {
-  'gpt-4-128k': {
-    id: 'gpt-4-128k',
-    name: 'GPT-4 (128k)',
-    contextLimit: 128000,
-    tokenizerType: 'cl100k_base',
+  // OpenAI
+  'gpt-5-400k': {
+    id: 'gpt-5-400k',
+    name: 'GPT-5 (400k total)',
+    // OpenAI API: 272k input + 128k output = 400k total
+    contextLimit: 400_000,
+    // Uses newer o200k_base tokenizer for accurate counts
+    tokenizerType: 'o200k_base',
   },
-  'claude-3-opus-200k': {
-    id: 'claude-3-opus-200k',
-    name: 'Claude 3 Opus (200k)',
-    contextLimit: 200000,
+
+  // Anthropic
+  'claude-4.1-opus-200k': {
+    id: 'claude-4.1-opus-200k',
+    name: 'Claude Opus 4.1 (200k)',
+    contextLimit: 200_000,
     tokenizerType: 'claude',
   },
-  'claude-3.5-sonnet-200k': {
-    id: 'claude-3.5-sonnet-200k',
-    name: 'Claude 3.5 Sonnet (200k)',
-    contextLimit: 200000,
+  'claude-4-sonnet-200k': {
+    id: 'claude-4-sonnet-200k',
+    name: 'Claude Sonnet 4 (200k)',
+    contextLimit: 200_000,
     tokenizerType: 'claude',
   },
-  'gemini-1.5-pro-1m': {
-    id: 'gemini-1.5-pro-1m',
-    name: 'Gemini 1.5 Pro (1M)',
-    contextLimit: 1000000,
+  'claude-4-sonnet-1m': {
+    id: 'claude-4-sonnet-1m',
+    name: 'Claude Sonnet 4 (1M beta)',
+    contextLimit: 1_000_000, // Requires beta access; falls back to 200k without it
+    tokenizerType: 'claude',
+  },
+
+  // Google
+  'gemini-2.5-pro-1m': {
+    id: 'gemini-2.5-pro-1m',
+    name: 'Gemini 2.5 Pro (1M)',
+    contextLimit: 1_000_000,
     tokenizerType: 'gemini',
   },
 };

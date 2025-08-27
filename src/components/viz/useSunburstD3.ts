@@ -160,18 +160,33 @@ export function useSunburstD3(svgRef: React.RefObject<SVGSVGElement>, data: Prom
 
     const radius = Math.max(1, Math.min(width, height) / 2);
 
-    // Build hierarchy and partition to obtain HierarchyRectangularNode with x0/x1/y0/y1
+    // First, build the hierarchy to calculate totals
+    const hierarchy = d3
+      .hierarchy<PromptNode>(data)
+      .sum((d) => Math.max(0, typeof d.value === 'number' ? d.value : 0)) // size by immediate node.value (not totalValue)
+      .sort((a, b) => (b.value || 0) - (a.value || 0));
+
+    // Calculate the total tokens before partitioning
+    const globalTotalImmediate = hierarchy.value || sumImmediate(data);
+
+    // Calculate the angular extent based on viewMode
+    // In absolute mode, scale the chart based on actual usage vs context limit
+    // In relative mode, always use the full circle
+    const angularExtent = (() => {
+      if (opts.viewMode === 'absolute' && opts.contextLimit && opts.contextLimit > 0) {
+        // Calculate what proportion of the context window is being used
+        const proportion = Math.min(1.0, globalTotalImmediate / opts.contextLimit);
+        // Scale the angular extent accordingly
+        return 2 * Math.PI * proportion;
+      }
+      // Relative mode or no context limit: use full circle
+      return 2 * Math.PI;
+    })();
+
+    // Build partition with scaled angular extent
     const root: d3.HierarchyRectangularNode<PromptNode> = d3
       .partition<PromptNode>()
-      .size([2 * Math.PI, radius])(
-        d3
-          .hierarchy<PromptNode>(data)
-          .sum((d) => Math.max(0, typeof d.value === 'number' ? d.value : 0)) // size by immediate node.value (not totalValue)
-          .sort((a, b) => (b.value || 0) - (a.value || 0))
-      );
-
-    // Helpful totals
-    const globalTotalImmediate = root.value || sumImmediate(data);
+      .size([angularExtent, radius])(hierarchy);
 
     // Accessors
     const arc = d3
@@ -196,6 +211,12 @@ export function useSunburstD3(svgRef: React.RefObject<SVGSVGElement>, data: Prom
     let gRoot = svg.select<SVGGElement>('g.sunburst-root');
     if (gRoot.empty()) {
       gRoot = svg.append('g').attr('class', 'sunburst-root');
+    }
+
+    // Add background arc group for absolute mode
+    let gBackground = gRoot.select<SVGGElement>('g.background');
+    if (gBackground.empty()) {
+      gBackground = gRoot.append('g').attr('class', 'background');
     }
 
     let gArcs = gRoot.select<SVGGElement>('g.arcs');
@@ -228,6 +249,42 @@ export function useSunburstD3(svgRef: React.RefObject<SVGSVGElement>, data: Prom
     // Visibility predicate for current zoom/focus
     function arcVisible(d: d3.HierarchyRectangularNode<PromptNode>): boolean {
       return d.y1 <= radius && d.y0 >= 0 && d.x1 > d.x0;
+    }
+
+    // Render background arc in absolute mode to show unused context
+    if (opts.viewMode === 'absolute' && opts.contextLimit && opts.contextLimit > 0 && angularExtent < 2 * Math.PI) {
+      const backgroundArc = d3
+        .arc()
+        .innerRadius(0)
+        .outerRadius(radius)
+        .startAngle(0)
+        .endAngle(2 * Math.PI);
+
+      // Create or update background arc
+      let bgPath = gBackground.select<SVGPathElement>('path.context-background');
+      if (bgPath.empty()) {
+        bgPath = gBackground
+          .append('path')
+          .attr('class', 'context-background')
+          .attr('fill', 'var(--dp-context-bg, #f3f4f6)')
+          .attr('fill-opacity', 0.3)
+          .attr('stroke', 'var(--dp-context-stroke, #d1d5db)')
+          .attr('stroke-width', 1)
+          .attr('stroke-opacity', 0.5)
+          .attr('stroke-dasharray', '4 2');
+      }
+      
+      bgPath
+        .transition()
+        .duration(duration)
+        .attr('d', backgroundArc as any);
+    } else {
+      // Remove background arc in relative mode
+      gBackground.select('path.context-background')
+        .transition()
+        .duration(duration)
+        .style('opacity', 0)
+        .remove();
     }
 
     // Build node list (exclude root ring)
