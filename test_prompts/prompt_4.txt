@@ -1,0 +1,1154 @@
+<user_instructions>
+Ok so one thing I'm noting is that the XML provided somehow doesn't fully map to how it's laid out in repoprompt itself. For example, there are usually a few things we deal with in repoprompt:
+
+- files
+- instructions
+- custom prompts or meta prompts
+- preset information
+- codemaps
+- file trees
+
+I'd love it if we could somehow represent that stuff in how we distinguish between colours? i.e. files would all be shades of one colour, similarly with file trees or code maps etc.
+
+I'm attaching as context a few test prompts which maybe help you discover how to represent this stuff in colour + then let's make a plan for how to represent this through code?
+
+Note please use your repoprompt tools when discovering all this stuff and then when you move to implement, remember repoprompt chat tool as it's very helpful.
+</user_instructions>
+<file_map>
+/Users/strickvl/coding/daisyprompt
+├── .gitignore
+├── CLAUDE.md
+├── index.html
+├── package.json
+├── postcss.config.js
+├── README.md
+├── tailwind.config.js
+├── tsconfig.json
+├── tsconfig.node.json
+├── tsconfig.tsbuildinfo
+├── vite.config.d.ts
+├── vite.config.js
+└── vite.config.ts
+├── design
+│   ├── daisyprompt_design_v1.md
+│   └── daisyprompt_initial_design.md
+├── dist
+│   ├── favicon.svg
+│   └── index.html
+│   ├── assets
+│   │   ├── index-BnoALeGC.js
+│   │   ├── index-BnoALeGC.js.map
+│   │   ├── index-Dihdy8M7.css
+│   │   ├── parser.worker-11uetJsd.js
+│   │   ├── parser.worker-11uetJsd.js.map
+│   │   ├── tiktoken_bg-Tru0PvTo.wasm
+│   │   ├── tokenize.worker-D30FKyOj.js
+│   │   └── tokenize.worker-D30FKyOj.js.map
+├── public
+│   └── favicon.svg
+├── src
+│   ├── App.tsx
+│   └── main.tsx
+│   ├── components
+│   │   └── ErrorBoundary.tsx
+│   │   ├── controls
+│   │   │   ├── ModelSelector.tsx
+│   │   │   ├── SearchBox.tsx
+│   │   │   ├── SizeBasisToggle.tsx
+│   │   │   ├── TokenDisplay.tsx
+│   │   │   └── ViewModeToggle.tsx
+│   │   ├── input
+│   │   │   ├── FileDrop.tsx
+│   │   │   ├── ValidationPanel.tsx
+│   │   │   └── XMLEditor.tsx
+│   │   ├── viz
+│   │   │   ├── Breadcrumbs.tsx
+│   │   │   ├── IcicleChart.tsx
+│   │   │   ├── SunburstChart.tsx *
+│   │   │   ├── useIcicleD3.ts
+│   │   │   └── useSunburstD3.ts *
+│   ├── pages
+│   │   └── Home.tsx
+│   ├── state
+│   │   └── useStore.ts
+│   ├── styles
+│   │   └── index.css
+│   ├── types
+│   │   └── models.ts *
+│   ├── utils
+│   │   ├── hashing.ts
+│   │   ├── tokenizerAdapter.ts
+│   │   └── treeTransforms.ts
+│   ├── workers
+│   │   ├── parser.worker.ts
+│   │   └── tokenize.worker.ts
+├── test_prompts
+│   ├── prompt_1.txt
+│   ├── prompt_2.txt
+│   └── prompt_3.txt
+</file_map>
+
+<file_contents>
+File: /Users/strickvl/coding/daisyprompt/src/components/viz/useSunburstD3.ts
+```ts
+import * as d3 from 'd3';
+import { useEffect, useRef } from 'react';
+import type { PromptNode, SizeBasis, ViewMode } from '@/types/models';
+
+/**
+ * Color-blind safe Okabe–Ito palette, extended for variety.
+ * Reference: https://jfly.uni-koeln.de/color/
+ */
+const OKABE_ITO = [
+  '#E69F00', // orange
+  '#56B4E9', // sky blue
+  '#009E73', // bluish green
+  '#F0E442', // yellow
+  '#0072B2', // blue
+  '#D55E00', // vermillion
+  '#CC79A7', // reddish purple
+  '#999999', // grey
+];
+
+/**
+ * Options for the sunburst hook
+ */
+export interface SunburstOptions {
+  width: number;
+  height: number;
+  sizeBasis: SizeBasis;
+  viewMode?: ViewMode; // 'absolute' | 'relative'
+  contextLimit?: number; // model context window limit for absolute mode
+  enableAnimations?: boolean;
+  onNodeClick?: (node: PromptNode) => void;
+  onHover?: (node: PromptNode | null) => void;
+  onFocusChange?: (focus: { node: PromptNode; ancestors: PromptNode[] }) => void;
+}
+
+/**
+ * Public API returned by the hook
+ */
+export interface SunburstAPI {
+  // noop for now; API reserved for future imperative controls
+}
+
+/**
+ * Calculates the aggregated total of immediate values across the whole tree.
+ * This is used for relative percentages and center totals.
+ */
+function sumImmediate(root: PromptNode): number {
+  let total = 0;
+  const stack: PromptNode[] = [root];
+  while (stack.length) {
+    const n = stack.pop() as PromptNode;
+    total += typeof n.value === 'number' ? n.value : 0;
+    if (n.children && n.children.length) {
+      for (const c of n.children) stack.push(c);
+    }
+  }
+  return total;
+}
+
+/**
+ * Format a numeric count based on basis.
+ */
+function formatCount(n: number, basis: SizeBasis): string {
+  const s = new Intl.NumberFormat().format(Math.max(0, Math.round(n)));
+  return basis === 'tokens' ? `${s} tokens` : `${s} chars`;
+}
+
+/**
+ * Compute percentages for tooltip based on view mode.
+ */
+function computePercents(args: {
+  nodeSubtreeTotal: number;
+  nodeImmediate: number;
+  parentSubtreeTotal: number | null;
+  globalTotal: number;
+  viewMode: ViewMode | undefined;
+  contextLimit?: number;
+}): { ofParent?: number; ofTotal: number; ofContext?: number } {
+  const { nodeSubtreeTotal, nodeImmediate, parentSubtreeTotal, globalTotal, viewMode, contextLimit } = args;
+  const ofParent =
+    parentSubtreeTotal && parentSubtreeTotal > 0 ? (nodeSubtreeTotal / parentSubtreeTotal) * 100 : undefined;
+  const ofTotal = globalTotal > 0 ? (nodeSubtreeTotal / globalTotal) * 100 : 0;
+
+  if (viewMode === 'absolute' && typeof contextLimit === 'number' && contextLimit > 0) {
+    const ofContext = Math.min(100, (nodeSubtreeTotal / contextLimit) * 100);
+    return { ofParent, ofTotal, ofContext };
+  }
+  return { ofParent, ofTotal, ofContext: undefined };
+}
+
+/**
+ * Create a color accessor for nodes using Okabe–Ito, keyed by stable group (file/module) with depth fallback.
+ */
+function makeColorAccessor(root: d3.HierarchyRectangularNode<PromptNode>) {
+  const groupKeyOf = (n: d3.HierarchyRectangularNode<PromptNode>) =>
+    ((n.data.attributes as any)?.__group as string) || n.data.name || n.data.id;
+
+  const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)));
+
+  let groups = root.children ? unique(root.children.map(groupKeyOf)) : [];
+  if (groups.length <= 1) {
+    const depth2 = root.descendants().filter((d) => d.depth === 2).map(groupKeyOf);
+    groups = unique(depth2);
+  }
+  if (groups.length === 0) groups = [groupKeyOf(root)];
+
+  const base = d3.scaleOrdinal<string, string>().domain(groups).range(OKABE_ITO);
+
+  const cache = new Map<string, string>();
+
+  const colorFor = (d: d3.HierarchyRectangularNode<PromptNode>): string => {
+    const key = d.data.id;
+    const hit = cache.get(key);
+    if (hit) return hit;
+
+    const anc = d.ancestors().reverse();
+    const top = anc[1] || anc[0];
+    const baseKey = groupKeyOf(top);
+    const baseColor = base(baseKey) || OKABE_ITO[0];
+
+    const relDepth = Math.max(0, d.depth - (top.depth || 0));
+    const rgb = d3.rgb(baseColor);
+    const adjusted = relDepth > 0 ? rgb.brighter(Math.min(1.25, relDepth * 0.25)) : rgb;
+
+    const out = adjusted.formatHex();
+    cache.set(key, out);
+    return out;
+  };
+
+  return colorFor;
+}
+
+/**
+ * Main D3 hook that renders a zoomable sunburst inside the given SVG.
+ */
+export function useSunburstD3(svgRef: React.RefObject<SVGSVGElement>, data: PromptNode | undefined, opts: SunburstOptions): SunburstAPI {
+  const initializedRef = useRef(false);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const focusedNodeIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
+    const { width, height, sizeBasis, viewMode, contextLimit } = opts;
+    // If a new dataset is provided (different root id), reset the focus sentinel so we announce once for the new tree.
+    if (data && focusedNodeIdRef.current && focusedNodeIdRef.current !== data.id) {
+      focusedNodeIdRef.current = null;
+    }
+    if (!data) {
+      // Clear if no data
+      d3.select(svgEl).selectAll('*').remove();
+      if (tooltipRef.current) {
+        tooltipRef.current.remove();
+        tooltipRef.current = null;
+      }
+      return;
+    }
+
+    const enableAnimations = opts.enableAnimations !== false;
+    const duration = enableAnimations ? 300 : 0;
+
+    const radius = Math.max(1, Math.min(width, height) / 2);
+
+    // First, build the hierarchy to calculate totals
+    const hierarchy = d3
+      .hierarchy<PromptNode>(data)
+      .sum((d) => Math.max(0, typeof d.value === 'number' ? d.value : 0)) // size by immediate node.value (not totalValue)
+      .sort((a, b) => (b.value || 0) - (a.value || 0));
+
+    // Calculate the total tokens before partitioning
+    const globalTotalImmediate = hierarchy.value || sumImmediate(data);
+
+    // Calculate the angular extent based on viewMode
+    // In absolute mode, scale the chart based on actual usage vs context limit
+    // In relative mode, always use the full circle
+    const angularExtent = (() => {
+      if (opts.viewMode === 'absolute' && opts.contextLimit && opts.contextLimit > 0) {
+        // Calculate what proportion of the context window is being used
+        const proportion = Math.min(1.0, globalTotalImmediate / opts.contextLimit);
+        // Scale the angular extent accordingly
+        return 2 * Math.PI * proportion;
+      }
+      // Relative mode or no context limit: use full circle
+      return 2 * Math.PI;
+    })();
+
+    // Build partition with scaled angular extent
+    const root: d3.HierarchyRectangularNode<PromptNode> = d3
+      .partition<PromptNode>()
+      .size([angularExtent, radius])(hierarchy);
+
+    // Accessors
+    const arc = d3
+      .arc<d3.HierarchyRectangularNode<PromptNode>>()
+      .startAngle((d) => d.x0)
+      .endAngle((d) => d.x1)
+      .innerRadius((d) => d.y0)
+      .outerRadius((d) => d.y1)
+      .cornerRadius(1);
+
+    const colorFor = makeColorAccessor(root);
+
+    // Prepare SVG scaffold only once; subsequent renders rebind data
+    const svg = d3
+      .select(svgEl)
+      .attr('viewBox', `${-width / 2} ${-height / 2} ${width} ${height}`)
+      .attr('role', 'img')
+      .attr('aria-label', 'Sunburst chart')
+      .attr('tabindex', 0)
+      .style('cursor', 'default');
+
+    let gRoot = svg.select<SVGGElement>('g.sunburst-root');
+    if (gRoot.empty()) {
+      gRoot = svg.append('g').attr('class', 'sunburst-root');
+    }
+
+    // Add background arc group for absolute mode
+    let gBackground = gRoot.select<SVGGElement>('g.background');
+    if (gBackground.empty()) {
+      gBackground = gRoot.append('g').attr('class', 'background');
+    }
+
+    let gArcs = gRoot.select<SVGGElement>('g.arcs');
+    if (gArcs.empty()) {
+      gArcs = gRoot.append('g').attr('class', 'arcs');
+    }
+
+    let gCenter = gRoot.select<SVGGElement>('g.center');
+    if (gCenter.empty()) {
+      gCenter = gRoot.append('g').attr('class', 'center');
+    }
+
+    // Tooltip (single persistent div)
+    if (!tooltipRef.current) {
+      const tip = document.createElement('div');
+      tip.style.position = 'fixed';
+      tip.style.pointerEvents = 'none';
+      tip.style.opacity = '0';
+      tip.style.transition = 'opacity 120ms ease';
+      tip.style.background = 'rgba(0,0,0,0.85)';
+      tip.style.color = 'white';
+      tip.style.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+      tip.style.padding = '6px 8px';
+      tip.style.borderRadius = '6px';
+      tip.style.zIndex = '1000';
+      document.body.appendChild(tip);
+      tooltipRef.current = tip;
+    }
+
+    // Visibility predicate for current zoom/focus
+    function arcVisible(d: d3.HierarchyRectangularNode<PromptNode>): boolean {
+      return d.y1 <= radius && d.y0 >= 0 && d.x1 > d.x0;
+    }
+
+    // Render background arc in absolute mode to show unused context
+    if (opts.viewMode === 'absolute' && opts.contextLimit && opts.contextLimit > 0 && angularExtent < 2 * Math.PI) {
+      const backgroundArc = d3
+        .arc()
+        .innerRadius(0)
+        .outerRadius(radius)
+        .startAngle(0)
+        .endAngle(2 * Math.PI);
+
+      // Create or update background arc
+      let bgPath = gBackground.select<SVGPathElement>('path.context-background');
+      if (bgPath.empty()) {
+        bgPath = gBackground
+          .append('path')
+          .attr('class', 'context-background')
+          .attr('fill', 'var(--dp-context-bg, #f3f4f6)')
+          .attr('fill-opacity', 0.3)
+          .attr('stroke', 'var(--dp-context-stroke, #d1d5db)')
+          .attr('stroke-width', 1)
+          .attr('stroke-opacity', 0.5)
+          .attr('stroke-dasharray', '4 2');
+      }
+      
+      bgPath
+        .transition()
+        .duration(duration)
+        .attr('d', backgroundArc as any);
+    } else {
+      // Remove background arc in relative mode
+      gBackground.select('path.context-background')
+        .transition()
+        .duration(duration)
+        .style('opacity', 0)
+        .remove();
+    }
+
+    // Build node list (exclude root ring)
+    const nodes: Array<d3.HierarchyRectangularNode<PromptNode>> = root.descendants().filter((d) => d.depth > 0);
+
+    // Data binding with event handler cleanup to prevent stale closures
+    gArcs
+      .selectAll<SVGPathElement, d3.HierarchyRectangularNode<PromptNode>>('path.slice')
+      .on('click', null)
+      .on('keydown', null)
+      .on('mousemove', null)
+      .on('mouseleave', null)
+      .on('mouseover', null)
+      .on('mouseout', null);
+
+    const join = gArcs
+      .selectAll<SVGPathElement, d3.HierarchyRectangularNode<PromptNode>>('path.slice')
+      .data(nodes, (d: any) => d.data.id);
+
+    // EXIT
+    join
+      .exit()
+      .transition()
+      .duration(duration)
+      .style('opacity', 0)
+      .remove();
+
+    // ENTER
+    const enter = join
+      .enter()
+      .append('path')
+      .attr('class', 'slice')
+      .attr('fill', (d) => colorFor(d))
+      .attr('d', (d) => {
+        // Blossom effect: start collapsed near center on first render
+        if (!initializedRef.current) {
+          const init = { ...d };
+          (init as any).y0 = 0;
+          (init as any).y1 = 0;
+          return arc(init as any);
+        }
+        return arc(d);
+      })
+      .attr('fill-opacity', (d) => (arcVisible(d) ? 1 : 0))
+      .attr('aria-label', (d) => `${d.data.name}: ${formatCount(d.data.value || 0, sizeBasis)}`)
+      .attr('role', 'treeitem')
+      .attr('tabindex', 0)
+      .on('click', (_event, d) => {
+        clicked(d);
+        if (opts.onNodeClick) opts.onNodeClick(d.data);
+      })
+      .on('focus', (_event, _d) => {
+        // no-op; focus styling handled by browser, tooltip on hover only
+      })
+      .on('keydown', (event, d) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          clicked(d);
+          if (opts.onNodeClick) opts.onNodeClick(d.data);
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          zoomToParent();
+        }
+      })
+      .on('mousemove', (event, d) => showTooltip(event as MouseEvent, d))
+      .on('mouseleave', (_event, _d) => hideTooltip())
+      .on('mouseover', (_event, d) => {
+        if (opts.onHover) opts.onHover(d.data);
+      })
+      .on('mouseout', (_event, _d) => {
+        if (opts.onHover) opts.onHover(null);
+      })
+      .style('cursor', 'pointer');
+
+    // ENTER + UPDATE
+    const merged = enter.merge(join as any);
+
+    merged
+      .transition()
+      .duration(duration)
+      .attrTween('d', function (d) {
+        // Animate blossom on first render; otherwise smooth position/angle updates
+        const i = d3.interpolate(
+          initializedRef.current
+            ? { x0: (this as any).__x0 || d.x0, x1: (this as any).__x1 || d.x1, y0: (this as any).__y0 || d.y0, y1: (this as any).__y1 || d.y1 }
+            : { x0: d.x0, x1: d.x1, y0: 0, y1: 0 },
+          { x0: d.x0, x1: d.x1, y0: d.y0, y1: d.y1 }
+        );
+        return (t) => {
+          const v = i(t);
+          (this as any).__x0 = v.x0;
+          (this as any).__x1 = v.x1;
+          (this as any).__y0 = v.y0;
+          (this as any).__y1 = v.y1;
+          return arc(v as any) || '';
+        };
+      })
+      .attr('fill', (d) => colorFor(d))
+      .attr('fill-opacity', (d) => (arcVisible(d) ? 1 : 0));
+
+    // Rebind event handlers on all slices to refresh closures and avoid stale handlers
+    merged
+      .on('click', (_event, d) => {
+        clicked(d);
+        if (opts.onNodeClick) opts.onNodeClick(d.data);
+      })
+      .on('keydown', (event, d) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          clicked(d);
+          if (opts.onNodeClick) opts.onNodeClick(d.data);
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          zoomToParent();
+        }
+      })
+      .on('mousemove', (event, d) => showTooltip(event as MouseEvent, d))
+      .on('mouseleave', (_event, _d) => hideTooltip())
+      .on('mouseover', (_event, d) => {
+        if (opts.onHover) opts.onHover(d.data);
+      })
+      .on('mouseout', (_event, _d) => {
+        if (opts.onHover) opts.onHover(null);
+      });
+
+    // CENTER: circle + labels
+    const centerRadius = Math.max(16, radius * 0.26);
+
+    let centerCircle = gCenter.select<SVGCircleElement>('circle.core');
+    if (centerCircle.empty()) {
+      centerCircle = gCenter
+        .append('circle')
+        .attr('class', 'core')
+        .attr('r', centerRadius)
+        .attr('fill', 'var(--dp-center-fill, #f9fafb)')
+        .attr('stroke', 'var(--dp-center-stroke, #d1d5db)')
+        .attr('stroke-width', 1)
+        .attr('role', 'button')
+        .attr('tabindex', 0)
+        .attr('aria-label', 'Zoom out')
+        .on('click', () => zoomToParent())
+        .on('keydown', (event: any) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            zoomToParent();
+          }
+        })
+        .style('cursor', 'pointer');
+    } else {
+      centerCircle.transition().duration(duration).attr('r', centerRadius);
+    }
+
+    let centerTitle = gCenter.select<SVGTextElement>('text.center-title');
+    if (centerTitle.empty()) {
+      centerTitle = gCenter
+        .append('text')
+        .attr('class', 'center-title')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'central')
+        .attr('y', -8)
+        .attr('font-weight', 600)
+        .attr('font-size', Math.max(10, Math.round(radius * 0.08)))
+        .text(data.name || 'Total');
+    } else {
+      centerTitle
+        .transition()
+        .duration(duration)
+        .attr('font-size', Math.max(10, Math.round(radius * 0.08)))
+        .tween('text', () => {
+          const target = data.name || 'Total';
+          return (t) => {
+            if (t === 1) centerTitle.text(target);
+          };
+        });
+    }
+
+    let centerStats = gCenter.select<SVGTextElement>('text.center-stats');
+    const focusTotals = root.value || globalTotalImmediate;
+    const percentForAbsolute =
+      viewMode === 'absolute' && typeof contextLimit === 'number' && contextLimit > 0
+        ? Math.min(100, (focusTotals / contextLimit) * 100)
+        : undefined;
+
+    const statsText =
+      percentForAbsolute !== undefined
+        ? `${formatCount(focusTotals, sizeBasis)} • ${percentForAbsolute.toFixed(1)}% of context`
+        : `${formatCount(focusTotals, sizeBasis)}`;
+
+    if (centerStats.empty()) {
+      centerStats = gCenter
+        .append('text')
+        .attr('class', 'center-stats')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'central')
+        .attr('y', 12)
+        .attr('font-size', Math.max(10, Math.round(radius * 0.06)))
+        .attr('fill', '#555')
+        .text(statsText);
+    } else {
+      centerStats
+        .transition()
+        .duration(duration)
+        .attr('font-size', Math.max(10, Math.round(radius * 0.06)))
+        .tween('text', () => {
+          return () => {
+            centerStats.text(statsText);
+          };
+        });
+    }
+
+    // Accessibility: announce focus exactly once on initial mount (or after dataset change)
+    if (opts.onFocusChange && focusedNodeIdRef.current === null) {
+      const ancestors = root.ancestors().map((a) => a.data);
+      try {
+        opts.onFocusChange({ node: root.data, ancestors });
+      } finally {
+        focusedNodeIdRef.current = root.data.id;
+      }
+    }
+
+    initializedRef.current = true;
+
+    // Helper: Tooltip handlers
+    function showTooltip(evt: MouseEvent, d: d3.HierarchyRectangularNode<PromptNode>) {
+      const tip = tooltipRef.current;
+      if (!tip) return;
+
+      const parent = d.parent;
+      const nodeImmediate = d.data.value || 0;
+      const nodeSubtreeTotal = d.value || nodeImmediate;
+      const parentSubtreeTotal = parent ? parent.value || null : null;
+
+      const { ofParent, ofTotal, ofContext } = computePercents({
+        nodeSubtreeTotal,
+        nodeImmediate,
+        parentSubtreeTotal,
+        globalTotal: globalTotalImmediate,
+        viewMode,
+        contextLimit,
+      });
+
+      // Identification details
+      const attrs = d.data.attributes || {};
+      const esc = (v: any) =>
+        String(v ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+
+      const tag = (attrs as any)['__tag'] || '';
+      const title = esc(d.data.name || '');
+      const tagSuffix = tag && tag !== d.data.name ? ` <span style="opacity:0.8">(${esc(tag)})</span>` : '';
+      const primary = `${title}${tagSuffix}`;
+
+      const fileLike =
+        (attrs as any).file ||
+        (attrs as any).filepath ||
+        (attrs as any).path ||
+        d.data.path ||
+        (attrs as any).src ||
+        (attrs as any).url ||
+        '';
+
+      const shorten = (s: string, max = 64) =>
+        s && s.length > max ? `${s.slice(0, Math.floor(max / 2) - 2)}…${s.slice(-Math.floor(max / 2) + 1)}` : s;
+
+      const secondary = esc(shorten(String(fileLike)));
+
+      // Key attributes first, then any others
+      const keys = ['id', 'name', 'type', 'class'] as const;
+      const keyAttrs: string[] = [];
+      for (const k of keys) {
+        const v = (attrs as any)[k];
+        if (v !== undefined && v !== null && String(v).length) {
+          keyAttrs.push(`${k}="${esc(v)}"`);
+        }
+      }
+      const otherAttrs: string[] = [];
+      for (const k in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k) && !keys.includes(k as any) && !k.startsWith('__')) {
+          const v = (attrs as any)[k];
+          if (v !== undefined && v !== null && String(v).length) {
+            otherAttrs.push(`${esc(k)}="${esc(v)}"`);
+          }
+        }
+      }
+      const attrLine =
+        keyAttrs.length || otherAttrs.length
+          ? `<div style="margin-top:2px"><span style="opacity:0.85">Attributes:</span> ${[...keyAttrs, ...otherAttrs].join(' • ')}</div>`
+          : '';
+
+      tip.innerHTML = `
+        <div style="font-weight:600;margin-bottom:2px">${primary}</div>
+        ${secondary ? `<div style="font-size:11px;color:#ccc;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${secondary}</div>` : ''}
+        ${attrLine}
+        <div style="border-top:1px solid rgba(255,255,255,0.18);margin:6px 0"></div>
+        <div>Subtree: ${formatCount(nodeSubtreeTotal, sizeBasis)}${ofParent !== undefined ? ` • ${ofParent.toFixed(1)}% of parent` : ''} • ${ofTotal.toFixed(1)}% of total</div>
+        <div>Node: ${formatCount(nodeImmediate, sizeBasis)}</div>
+        ${ofContext !== undefined ? `<div>${ofContext.toFixed(1)}% of context</div>` : ''}
+      `.trim();
+
+      tip.style.opacity = '1';
+      tip.style.left = `${evt.clientX + 10}px`;
+      tip.style.top = `${evt.clientY + 10}px`;
+    }
+
+    function hideTooltip() {
+      const tip = tooltipRef.current;
+      if (!tip) return;
+      tip.style.opacity = '0';
+    }
+
+    // Zoom mechanics adapted from Observable's Zoomable Sunburst
+    function clicked(p: d3.HierarchyRectangularNode<PromptNode>) {
+      // Guard: ensure the clicked node has the required partition props. If not, try to resolve from current root.
+      const isRectNode = (n: any): n is d3.HierarchyRectangularNode<PromptNode> =>
+        n && typeof n.x0 === 'number' && typeof n.x1 === 'number' && typeof n.y0 === 'number' && typeof n.y1 === 'number';
+
+      let pNode: d3.HierarchyRectangularNode<PromptNode> | undefined = isRectNode(p) ? p : undefined;
+      if (!pNode) {
+        const pid = (p as any)?.data?.id ?? (p as any)?.id;
+        if (pid) {
+          pNode = root.descendants().find((d) => d.data.id === pid);
+        }
+      }
+      if (!pNode || !isRectNode(pNode)) {
+        console.warn('[useSunburstD3] clicked called with invalid or stale node; ignoring.');
+        return;
+      }
+
+      root.each((d) => {
+        (d as any).target = {
+          x0: Math.max(0, Math.min(2 * Math.PI, d.x0 + (pNode.x0 - root.x0))),
+          x1: Math.max(0, Math.min(2 * Math.PI, d.x1 + (pNode.x0 - root.x0))),
+          y0: Math.max(0, d.y0 - pNode.y0),
+          y1: Math.max(0, d.y1 - pNode.y0),
+        };
+      });
+
+      const t = gArcs.transition().duration(duration);
+
+      // Select all slices fresh to avoid stale references
+      (gArcs.selectAll<SVGPathElement, d3.HierarchyRectangularNode<PromptNode>>('path.slice') as d3.Selection<SVGPathElement, d3.HierarchyRectangularNode<PromptNode>, any, any>)
+        .transition(t as any)
+        .tween('data', (d: any) => {
+          if (!d || typeof d.x0 !== 'number' || !(d as any).target) {
+            return () => {}; // no-op tween if data is invalid
+          }
+          const i = d3.interpolate({ x0: d.x0, x1: d.x1, y0: d.y0, y1: d.y1 }, (d as any).target);
+          return (t2: number) => {
+            const v = i(t2);
+            d.x0 = v.x0;
+            d.x1 = v.x1;
+            d.y0 = v.y0;
+            d.y1 = v.y1;
+          };
+        })
+        .attrTween('d', function (d: any) {
+          return () => d ? (arc(d as any) || '') : '';
+        })
+        .attr('fill-opacity', (d) => (arcVisible(d) ? 1 : 0));
+
+      // Update center labels to reflect new focus subtree totals
+      const focusTotal = pNode.value || pNode.data.value || 0;
+      const absPct =
+        viewMode === 'absolute' && typeof contextLimit === 'number' && contextLimit > 0
+          ? Math.min(100, (focusTotal / contextLimit) * 100)
+          : undefined;
+      const txt =
+        absPct !== undefined
+          ? `${formatCount(focusTotal, sizeBasis)} • ${absPct.toFixed(1)}% of context`
+          : `${formatCount(focusTotal, sizeBasis)}`;
+
+      gCenter.select<SVGTextElement>('text.center-title').text(pNode.data.name || 'Total');
+      gCenter.select<SVGTextElement>('text.center-stats').text(txt);
+
+      if (opts.onFocusChange) {
+        const newId = pNode.data.id;
+        if (focusedNodeIdRef.current !== newId) {
+          const ancestors = pNode.ancestors().reverse().map((a) => a.data);
+          opts.onFocusChange({ node: pNode.data, ancestors });
+          focusedNodeIdRef.current = newId;
+        }
+      }
+    }
+
+    function zoomToParent() {
+      // Simplified: zoom back to the root
+      clicked(root);
+    }
+
+    // Cleanup
+    return () => {
+      try {
+        gArcs
+          .selectAll<SVGPathElement, d3.HierarchyRectangularNode<PromptNode>>('path.slice')
+          .on('click', null)
+          .on('keydown', null)
+          .on('mousemove', null)
+          .on('mouseleave', null)
+          .on('mouseover', null)
+          .on('mouseout', null);
+        gCenter.select<SVGCircleElement>('circle.core').on('click', null).on('keydown', null);
+      } catch {
+        // no-op
+      }
+    };
+  }, [
+    svgRef,
+    data,
+    opts.width,
+    opts.height,
+    opts.sizeBasis,
+    opts.viewMode,
+    opts.contextLimit,
+    opts.enableAnimations,
+    opts.onNodeClick,
+    opts.onHover,
+    opts.onFocusChange,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (tooltipRef.current) {
+        tooltipRef.current.remove();
+        tooltipRef.current = null;
+      }
+    };
+  }, []);
+
+  return {};
+}
+
+export default useSunburstD3;
+```
+
+File: /Users/strickvl/coding/daisyprompt/src/components/viz/SunburstChart.tsx
+```tsx
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { PromptNode, SizeBasis, ViewMode, ModelId } from '@/types/models';
+import { MODELS } from '@/types/models';
+import useSunburstD3, { SunburstOptions } from './useSunburstD3';
+import { Breadcrumbs } from './Breadcrumbs';
+
+type SunburstChartProps = {
+  data?: PromptNode;
+  sizeBasis: SizeBasis;
+  viewMode?: ViewMode;
+  modelId?: ModelId;
+  className?: string;
+  style?: React.CSSProperties;
+  onNodeClick?: (node: PromptNode) => void;
+  onHover?: (node: PromptNode | null) => void;
+  enableAnimations?: boolean;
+};
+
+export function SunburstChart({
+  data,
+  sizeBasis,
+  viewMode = 'relative',
+  modelId = 'gpt-5-400k',
+  className,
+  style,
+  onNodeClick,
+  onHover,
+  enableAnimations = true,
+}: SunburstChartProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dims, setDims] = useState<{ width: number; height: number }>({ width: 640, height: 480 });
+  const [focusTrail, setFocusTrail] = useState<Array<{ id: string; name: string }>>([]);
+
+  // Responsive sizing: use ResizeObserver on container
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        const w = Math.max(240, Math.round(cr.width));
+        const h = Math.max(240, Math.round(cr.height));
+        setDims({ width: w, height: h });
+      }
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
+  const contextLimit = useMemo(() => {
+    const cfg = MODELS[modelId];
+    return cfg?.contextLimit;
+  }, [modelId]);
+
+  // Wire up D3 hook
+  const api = useSunburstD3(svgRef, data, {
+    width: dims.width,
+    height: dims.height,
+    sizeBasis,
+    viewMode,
+    contextLimit,
+    enableAnimations,
+    onNodeClick,
+    onHover,
+    onFocusChange: ({ ancestors }) => {
+      const items = ancestors.map((a) => ({ id: a.id, name: a.name }));
+      setFocusTrail(items);
+    },
+  } as SunburstOptions);
+
+  // Keyboard support at container level: Escape zoom-out is handled in hook via center circle;
+  // here we just forward focus to SVG on mount.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const t = setTimeout(() => {
+      svg.focus();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [dims.width, dims.height]);
+
+  // Breadcrumb navigation: clicking an ancestor should instruct the hook to zoom. For now, we trigger onNodeClick
+  // and rely on D3 click handlers. Without a direct API to programmatically zoom to arbitrary ancestor,
+  // we can dispatch a synthetic click on the closest arc if available. As a simpler fallback,
+  // we just update the center labels via focus (the hook exposes onFocusChange only).
+  // Note: For MVP, we can still provide breadcrumb UI and rely on click/hover for navigation.
+  const onBreadcrumbSelect = (_index: number, _item: { id: string; name: string }) => {
+    // This could be enhanced to programmatically zoom to the ancestor if the arc path element is retrievable by data-id.
+    // Kept as no-op for now as the hook manages zoom on click directly.
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={className}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        minHeight: 280,
+        ...style,
+      }}
+      aria-label="Sunburst Chart Container"
+    >
+      <svg
+        ref={svgRef}
+        width={dims.width}
+        height={dims.height}
+        role="img"
+        aria-label="Sunburst chart"
+        style={{ display: 'block', width: '100%', height: '100%', outline: 'none' }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          left: 8,
+          top: 8,
+          right: 8,
+          pointerEvents: 'auto',
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        <Breadcrumbs items={focusTrail} onSelect={onBreadcrumbSelect} />
+      </div>
+    </div>
+  );
+}
+
+export default SunburstChart;
+```
+
+File: /Users/strickvl/coding/daisyprompt/src/types/models.ts
+```ts
+// Core type definitions as specified in the design document
+
+export type ModelId = string;
+
+// Source of truth from XML parsing
+export interface XmlNodeMeta {
+  id: string;                       // stable (path-like or hash)
+  tag: string;                      // element/tag name
+  attrs?: Record<string, string>;
+  path: string;                     // XPath-like or custom
+  kind: 'text' | 'code' | 'metadata' | 'container' | 'other';
+  charCount: number;                // immediate, cheap
+  tokenCount?: number;              // per selected model (filled incrementally)
+  hash: string;                     // content hash for de-dupe/cache
+  children?: XmlNodeMeta[];
+}
+
+// View model for D3 visualization
+export interface PromptNode {
+  id: string;                       // unique id for D3 node
+  name: string;                     // display label (usually tag)
+  value: number;                    // node-only size (tokens or chars)
+  totalValue: number;               // node + descendants
+  path: string;                     // breadcrumb path
+  content?: string;                 // trimmed preview (escaped)
+  attributes: Record<string, string>;
+  children: PromptNode[];
+}
+
+// Token caching strategy
+export type TokenCacheKey = `${string}:${ModelId}`; // `${hash}:${modelId}`
+export type TokenCache = Record<TokenCacheKey, number>;
+
+// Per-model statistics
+export interface PerModelTotals {
+  [modelId: ModelId]: { totalTokens: number; totalChars: number };
+}
+
+// Model configurations
+export interface ModelConfig {
+  id: ModelId;
+  name: string;
+  contextLimit: number;
+  tokenizerType: 'cl100k_base' | 'o200k_base' | 'claude' | 'gemini' | 'custom';
+  overheadTokens?: number; // System/tool wrapper overhead
+}
+
+// Current generation models with accurate context limits
+export const MODELS: Record<ModelId, ModelConfig> = {
+  // OpenAI
+  'gpt-5-400k': {
+    id: 'gpt-5-400k',
+    name: 'GPT-5 (400k total)',
+    // OpenAI API: 272k input + 128k output = 400k total
+    contextLimit: 400_000,
+    // Uses newer o200k_base tokenizer for accurate counts
+    tokenizerType: 'o200k_base',
+  },
+
+  // Anthropic
+  'claude-4.1-opus-200k': {
+    id: 'claude-4.1-opus-200k',
+    name: 'Claude Opus 4.1 (200k)',
+    contextLimit: 200_000,
+    tokenizerType: 'claude',
+  },
+  'claude-4-sonnet-200k': {
+    id: 'claude-4-sonnet-200k',
+    name: 'Claude Sonnet 4 (200k)',
+    contextLimit: 200_000,
+    tokenizerType: 'claude',
+  },
+  'claude-4-sonnet-1m': {
+    id: 'claude-4-sonnet-1m',
+    name: 'Claude Sonnet 4 (1M beta)',
+    contextLimit: 1_000_000, // Requires beta access; falls back to 200k without it
+    tokenizerType: 'claude',
+  },
+
+  // Google
+  'gemini-2.5-pro-1m': {
+    id: 'gemini-2.5-pro-1m',
+    name: 'Gemini 2.5 Pro (1M)',
+    contextLimit: 1_000_000,
+    tokenizerType: 'gemini',
+  },
+};
+
+// Worker message contracts for parsing
+export type ParseRequest =
+  | { type: 'parse:xml'; xml: string; options?: { preserveAttrs?: boolean; namespace?: boolean } };
+
+export type ParseProgress =
+  | { type: 'parse:progress'; done: number; total?: number; stage: 'parsing' | 'hashing' }
+  | { type: 'parse:partial'; subtree: XmlNodeMeta }
+  | { type: 'parse:done'; root: XmlNodeMeta }
+  | { type: 'parse:error'; message: string };
+
+// Worker message contracts for tokenization
+export type TokenizeRequest = {
+  type: 'tokenize:tree';
+  root: XmlNodeMeta;
+  modelId: ModelId;
+};
+
+export type TokenizeProgress =
+  | { type: 'tokenize:progress'; processed: number; total?: number }
+  | { type: 'tokenize:partial'; updates: Array<{ id: string; hash: string; tokens: number }> }
+  | { type: 'tokenize:done'; totals: { modelId: ModelId; totalTokens: number } }
+  | { type: 'tokenize:error'; message: string };
+
+// Application state types
+export type SizeBasis = 'tokens' | 'chars';
+export type ViewMode = 'absolute' | 'relative';
+export type VisualizationType = 'sunburst' | 'icicle';
+export type ParseStatus = 'idle' | 'parsing' | 'parsed' | 'error';
+
+// Search and selection
+export interface SearchResult {
+  nodeId: string;
+  path: string;
+  matchType: 'tag' | 'path' | 'content';
+  score: number;
+}
+
+// Performance settings
+export interface PerformanceConfig {
+  maxVisibleNodes: number;        // Default 2000
+  aggregationThreshold: number;   // Default 0.75% of total
+  enableAnimations: boolean;
+  enableLOD: boolean;             // Level of detail rendering
+  debounceMs: number;            // Default 150ms
+}
+
+// Export formats
+export type ExportFormat = 'png' | 'svg' | 'csv' | 'json';
+
+export interface ExportOptions {
+  format: ExportFormat;
+  includeMetadata?: boolean;
+  quality?: number; // For PNG
+}
+```
+</file_contents>
+<meta prompt 1 = "Code commenting">
+When adding comments, focus on explaining WHY code works the way it does, not WHAT changed. 
+
+Good comments explain:
+- Complex logic or algorithms
+- Non-obvious design decisions  
+- Business rules or constraints
+- Purpose of functions/classes
+- Edge cases being handled
+
+Avoid change-tracking comments like:
+- "Updated from previous version"
+- "New implementation" 
+- "Changed to use X instead of Y"
+- "Refactored this section"
+
+Comments should help someone (including future-you) understand the code 6 months later, not track the edit history.
+</meta prompt 1>
+<meta prompt 2 = "Markdown link formatting">
+When including links, integrate them naturally into the prose. The linked text should be a meaningful part of the sentence, not an afterthought.
+
+CORRECT approach - links as natural sentence elements:
+- Link a relevant phrase that flows with your writing: "Performance quality remains [the top blocker](url) for production deployment."
+- Link descriptive text that adds information: "[They unblocked launch](url) by building an offline eval suite."
+- Link statistics or claims directly: "[51% of teams](url) already run agents in production."
+
+NEVER do these:
+- Don't append "(source)" or similar: "51% of teams run agents in production ([source](url))"
+- Don't use numbered references: "51% of teams run agents in production [1]"
+- Don't create separate "Sources" sections at the end
+- Don't use generic link text like "click here" or "this link"
+- Don't break sentence flow to accommodate a link
+
+The reader should be able to understand your point even if they never click the link. The linked text itself should contribute meaning to the sentence, not just serve as a citation mechanism.
+</meta prompt 2>
+<user_instructions>
+Ok so one thing I'm noting is that the XML provided somehow doesn't fully map to how it's laid out in repoprompt itself. For example, there are usually a few things we deal with in repoprompt:
+
+- files
+- instructions
+- custom prompts or meta prompts
+- preset information
+- codemaps
+- file trees
+
+I'd love it if we could somehow represent that stuff in how we distinguish between colours? i.e. files would all be shades of one colour, similarly with file trees or code maps etc.
+
+I'm attaching as context a few test prompts which maybe help you discover how to represent this stuff in colour + then let's make a plan for how to represent this through code?
+
+Note please use your repoprompt tools when discovering all this stuff and then when you move to implement, remember repoprompt chat tool as it's very helpful.
+</user_instructions>
