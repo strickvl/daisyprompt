@@ -1,0 +1,43 @@
+<user_instructions>
+  This is a test prompt to demonstrate semantic color coding
+</user_instructions>
+
+<file_map>
+  /Users/strickvl/project
+  ├── src/
+  │   ├── components/
+  │   └── utils/
+  └── package.json
+</file_map>
+
+<file_contents>
+  <file filepath="src/index.ts">
+    console.log('Hello World');
+  </file>
+  <file filepath="src/utils/helper.ts">
+    export const helper = () => {};
+  </file>
+</file_contents>
+
+<meta_prompt type="system">
+  You are a helpful assistant
+</meta_prompt>
+
+<codemap>
+  <function name="main">
+    <description>Entry point</description>
+  </function>
+</codemap>
+
+<references>
+  <link url="https://example.com">Documentation</link>
+  <reference>API Guide</reference>
+</references>
+
+<sugg_1>
+  Suggestion for improvement
+</sugg_1>
+
+<other_element>
+  Some other content type
+</other_element>

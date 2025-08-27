@@ -31,7 +31,7 @@ export default function SizeBasisToggle() {
   const tokensReady = typeof tokensTotal === 'number' || tokensKnown;
 
   const btnBase =
-    'inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500';
+    'inline-flex items-center justify-center px-2.5 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500';
   const selected =
     'bg-indigo-600 text-white hover:bg-indigo-600 border-indigo-600';
   const unselected =
@@ -42,7 +42,7 @@ export default function SizeBasisToggle() {
   const setBasis = (b: SizeBasis) => () => setSizeBasis(b);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex items-center">
       <div role="group" aria-label="Size basis" className="inline-flex rounded-md shadow-sm border border-gray-300 overflow-hidden dark:border-gray-600">
         <button
           type="button"
@@ -75,13 +75,6 @@ export default function SizeBasisToggle() {
           </span>
         </button>
       </div>
-      <span className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-        {isProxy
-          ? 'Sizing by characters as a proxy while tokens compute.'
-          : parseStatus === 'parsed'
-          ? 'Sizing by tokens.'
-          : 'Ready.'}
-      </span>
     </div>
   );
 }

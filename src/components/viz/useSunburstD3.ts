@@ -1,6 +1,7 @@
 import * as d3 from 'd3';
 import { useEffect, useRef } from 'react';
-import type { PromptNode, SizeBasis, ViewMode } from '@/types/models';
+import type { PromptNode, SizeBasis, ViewMode, RepoPromptElementType } from '@/types/models';
+import { SEMANTIC_PALETTE } from '@/utils/semantic';
 
 /**
  * Color-blind safe Okabe–Ito palette, extended for variety.
@@ -94,6 +95,7 @@ function makeColorAccessor(root: d3.HierarchyRectangularNode<PromptNode>) {
   const groupKeyOf = (n: d3.HierarchyRectangularNode<PromptNode>) =>
     ((n.data.attributes as any)?.__group as string) || n.data.name || n.data.id;
 
+  // Prepare group-based ordinal scale (fallback path)
   const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)));
 
   let groups = root.children ? unique(root.children.map(groupKeyOf)) : [];
@@ -103,8 +105,145 @@ function makeColorAccessor(root: d3.HierarchyRectangularNode<PromptNode>) {
   }
   if (groups.length === 0) groups = [groupKeyOf(root)];
 
-  const base = d3.scaleOrdinal<string, string>().domain(groups).range(OKABE_ITO);
+  const groupScale = d3.scaleOrdinal<string, string>().domain(groups).range(OKABE_ITO);
 
+  // Build a robust resolver from arbitrary sem strings to palette keys:
+  // - Accept values from attributes.__semType, attributes.semanticType, attributes.type, data.semanticType, data.type
+  // - Normalize case, whitespace, hyphens/underscores
+  // - Recognize common aliases (file -> files, instruction -> instructions, etc.)
+  // - Only return keys that actually exist in SEMANTIC_PALETTE; unknowns return undefined to trigger group fallback
+  const palette = SEMANTIC_PALETTE as Record<string, string>;
+  const paletteIndex = new Map<string, string>();
+  const paletteKeys = Object.keys(palette || {});
+  // Precompute a tolerant lookup for palette keys
+  for (const k of paletteKeys) {
+    const lower = k.toLowerCase();
+    const unders = lower.replace(/[\s-]+/g, '_');
+    const dashy = lower.replace(/[\s_]+/g, '-');
+    const simple = lower.replace(/[\s_-]+/g, '');
+    paletteIndex.set(lower, k);
+    paletteIndex.set(unders, k);
+    paletteIndex.set(dashy, k);
+    paletteIndex.set(simple, k);
+    // Add a few helpful aliases mapping to this key
+    if (lower === 'files') {
+      paletteIndex.set('file', k);
+      paletteIndex.set('repo_files', k);
+      paletteIndex.set('source', k);
+      paletteIndex.set('sources', k);
+      paletteIndex.set('documents', k);
+      paletteIndex.set('document', k);
+    }
+    if (lower === 'file_tree' || lower === 'file-tree') {
+      paletteIndex.set('filetree', k);
+      paletteIndex.set('tree', k);
+    }
+    if (lower === 'codemap' || lower === 'code_map') {
+      paletteIndex.set('code_map', k);
+      paletteIndex.set('codemap', k);
+      paletteIndex.set('code', k);
+      paletteIndex.set('code-map', k);
+    }
+    if (lower === 'meta_prompt' || lower === 'meta-prompt') {
+      paletteIndex.set('metaprompt', k);
+      paletteIndex.set('meta', k);
+    }
+    if (lower === 'instructions') {
+      paletteIndex.set('instruction', k);
+      paletteIndex.set('prompt', k);
+    }
+    if (lower === 'references') {
+      paletteIndex.set('reference', k);
+      paletteIndex.set('context', k);
+      paletteIndex.set('citations', k);
+    }
+    if (lower === 'suggestions') {
+      paletteIndex.set('suggestion', k);
+      paletteIndex.set('hints', k);
+    }
+    if (lower === 'other') {
+      paletteIndex.set('misc', k);
+      paletteIndex.set('unknown', k);
+      paletteIndex.set('none', k);
+    }
+  }
+
+  const resolveSemKey = (raw: any): string | undefined => {
+    if (raw === null || raw === undefined) return undefined;
+    const s0 = String(raw).trim();
+    if (!s0) return undefined;
+    const s = s0.toLowerCase();
+    const unders = s.replace(/[\s-]+/g, '_');
+    const dashy = s.replace(/[\s_]+/g, '-');
+    const simple = s.replace(/[\s_-]+/g, '');
+    return paletteIndex.get(s) ?? paletteIndex.get(unders) ?? paletteIndex.get(dashy) ?? paletteIndex.get(simple);
+  };
+
+  const directSemKey = (n: d3.HierarchyRectangularNode<PromptNode>): string | undefined => {
+    const attrs = (n.data.attributes as any) || {};
+    // Prefer attribute-driven semantics over data fields to avoid default 'other' overriding specific tags
+    const candidates = [
+      attrs.__semType,
+      attrs.semanticType,
+      attrs.type,
+      n.data.semanticType,
+      (n.data as any)?.type,
+    ];
+    for (const c of candidates) {
+      const k = resolveSemKey(c);
+      if (k) return k;
+    }
+    return undefined;
+  };
+
+  const ancestorSemKey = (n: d3.HierarchyRectangularNode<PromptNode>): string | undefined => {
+    // Walk up to find the nearest ancestor with a specific (non-'other') semantic category
+    let a = n.parent || null;
+    while (a) {
+      const k = directSemKey(a);
+      if (k && k.toLowerCase() !== 'other') return k;
+      a = a.parent || null;
+    }
+    return undefined;
+  };
+
+  // Semantic helpers: prefer specific node semantics; if absent or 'other', inherit a non-'other' ancestor if available
+  const getSemType = (n: d3.HierarchyRectangularNode<PromptNode>): RepoPromptElementType | undefined => {
+    const k = directSemKey(n);
+    if (k && k.toLowerCase() !== 'other') return k as RepoPromptElementType;
+    const ancestor = ancestorSemKey(n);
+    if (!k && ancestor) return ancestor as RepoPromptElementType;
+    if (k && k.toLowerCase() === 'other') {
+      const otherKey = paletteIndex.get('other') || 'other';
+      return (ancestor || otherKey) as RepoPromptElementType;
+    }
+    return undefined;
+  };
+
+  // Find the highest ancestor that shares the same semantic type for relative depth shading
+  const findCategoryRoot = (n: d3.HierarchyRectangularNode<PromptNode>): d3.HierarchyRectangularNode<PromptNode> => {
+    const t = getSemType(n);
+    if (!t) {
+      // If no semantic type could be resolved, stick to the immediate ring ancestor for stable fallback behaviour
+      const anc = n.ancestors().reverse();
+      return anc[1] || anc[0];
+    }
+    let a: d3.HierarchyRectangularNode<PromptNode> = n;
+    while (a.parent && getSemType(a.parent) === t) a = a.parent;
+    return a;
+  };
+
+  // Shade the base color by relative depth within the semantic category.
+  // Light bases are darkened, dark bases are lightened to improve perceptual separation while retaining category identity.
+  const shadeWithinCategory = (baseHex: string, relDepth: number): string => {
+    const c = d3.hsl(baseHex);
+    const isLight = c.l >= 0.7;
+    const delta = Math.min(0.28, Math.max(0, relDepth) * 0.08);
+    c.l = isLight ? Math.max(0.25, c.l - delta) : Math.min(0.95, c.l + delta);
+    return c.formatHex();
+  };
+
+  // Cache per-node computed colors to avoid repeated work on interactive transitions
   const cache = new Map<string, string>();
 
   const colorFor = (d: d3.HierarchyRectangularNode<PromptNode>): string => {
@@ -112,13 +251,25 @@ function makeColorAccessor(root: d3.HierarchyRectangularNode<PromptNode>) {
     const hit = cache.get(key);
     if (hit) return hit;
 
+    // Semantic-category colouring if resolvable
+    const sem = getSemType(d);
+    if (sem) {
+      const baseHex = (SEMANTIC_PALETTE as any)[sem] || OKABE_ITO[0];
+      const rootOfType = findCategoryRoot(d);
+      const relDepth = Math.max(0, d.depth - rootOfType.depth);
+      const out = shadeWithinCategory(baseHex, relDepth);
+      cache.set(key, out);
+      return out;
+    }
+
+    // Fallback: group-based colour using Okabe–Ito palette keyed by top ancestor group
     const anc = d.ancestors().reverse();
     const top = anc[1] || anc[0];
     const baseKey = groupKeyOf(top);
-    const baseColor = base(baseKey) || OKABE_ITO[0];
+    const baseHex = groupScale(baseKey) || OKABE_ITO[0];
 
     const relDepth = Math.max(0, d.depth - (top.depth || 0));
-    const rgb = d3.rgb(baseColor);
+    const rgb = d3.rgb(baseHex);
     const adjusted = relDepth > 0 ? rgb.brighter(Math.min(1.25, relDepth * 0.25)) : rgb;
 
     const out = adjusted.formatHex();

@@ -68,8 +68,8 @@ export default function TokenDisplay() {
     percent < 70 ? '#22c55e' : percent < 90 ? '#eab308' : '#ef4444';
 
   const ring = {
-    size: 64,
-    stroke: 8,
+    size: 56,
+    stroke: 7,
   };
   const r = (ring.size - ring.stroke) / 2;
   const C = 2 * Math.PI * r;

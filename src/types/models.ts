@@ -2,6 +2,16 @@
 
 export type ModelId = string;
 
+export type RepoPromptElementType =
+  | 'files'
+  | 'instructions'
+  | 'meta_prompt'
+  | 'file_tree'
+  | 'codemap'
+  | 'references'
+  | 'suggestions'
+  | 'other';
+
 // Source of truth from XML parsing
 export interface XmlNodeMeta {
   id: string;                       // stable (path-like or hash)
@@ -12,6 +22,7 @@ export interface XmlNodeMeta {
   charCount: number;                // immediate, cheap
   tokenCount?: number;              // per selected model (filled incrementally)
   hash: string;                     // content hash for de-dupe/cache
+  rpType?: RepoPromptElementType;
   children?: XmlNodeMeta[];
 }
 
@@ -24,6 +35,7 @@ export interface PromptNode {
   path: string;                     // breadcrumb path
   content?: string;                 // trimmed preview (escaped)
   attributes: Record<string, string>;
+  semanticType?: RepoPromptElementType;
   children: PromptNode[];
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '@/state/useStore';
 import type { ModelId, TokenizeProgress, TokenizeRequest } from '@/types/models';
 import { toPromptNode } from '@/utils/treeTransforms';
@@ -8,6 +8,7 @@ import ViewModeToggle from '@/components/controls/ViewModeToggle';
 import SizeBasisToggle from '@/components/controls/SizeBasisToggle';
 import TokenDisplay from '@/components/controls/TokenDisplay';
 import SearchBox from '@/components/controls/SearchBox';
+import SemanticLegend from '@/components/controls/SemanticLegend';
 
 import XMLEditor from '@/components/input/XMLEditor';
 import FileDrop from '@/components/input/FileDrop';
@@ -39,6 +40,10 @@ export default function Home() {
   const tokenCache = useStore((s) => s.tokenCache);
 
   const actions = useStore((s) => s.actions);
+  const legendPinned = useStore((s) => s.legendPinned);
+  const handleLegendPinChange = (next: boolean) => {
+    actions.setLegendPinned(next);
+  };
 
   // Active model used for current tokenization cycle
   const activeModelRef = useRef<ModelId>(modelId);
@@ -154,15 +159,16 @@ export default function Home() {
     <div className="flex h-screen w-screen flex-col bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100">
       {/* Top Controls */}
       <header className="w-full border-b border-gray-200 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-800/60">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-1 flex-wrap items-center gap-3">
+        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-3 py-1.5 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-1 flex-wrap items-center gap-2">
             <ModelSelector />
             <ViewModeToggle />
             <SizeBasisToggle />
           </div>
-          <div className="flex shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <SearchBox />
             <TokenDisplay />
+            <SemanticLegend variant="popover" onRequestPinChange={handleLegendPinChange} />
           </div>
         </div>
       </header>
@@ -183,7 +189,7 @@ export default function Home() {
 
           {/* Center Visualization */}
           <section className="min-h-0 rounded-md border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-700 dark:bg-gray-800 lg:col-span-8">
-            <div className="h-[520px] w-full md:h-[620px] lg:h-[720px]">
+            <div className="relative h-[520px] w-full md:h-[620px] lg:h-[720px]">
               {visualizationType === 'sunburst' ? (
                 <SunburstChart
                   data={chartData}
@@ -197,6 +203,11 @@ export default function Home() {
               ) : (
                 <IcicleChart />
               )}
+              {legendPinned ? (
+                <div className="pointer-events-auto absolute bottom-2 right-2 z-20">
+                  <SemanticLegend variant="floating" dense pinned onRequestPinChange={handleLegendPinChange} />
+                </div>
+              ) : null}
             </div>
           </section>
         </div>

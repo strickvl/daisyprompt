@@ -12,6 +12,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { SaxesParser } from 'saxes';
 import type { SaxesTag, SaxesAttribute } from 'saxes';
 import { initHashing, hashStringSync, stableAttrString } from '@/utils/hashing';
+import { classifyRepoPromptType } from '@/utils/semantic';
 
 export type { ParseRequest, ParseProgress, XmlNodeMeta };
 
@@ -208,6 +209,7 @@ function buildMetaTreeFromFxp(
 
     const childCount = children ? (children as XmlNodeMeta[]).length : 0;
     const kind = classifyKind(tag, textContent, childCount);
+    const rpType = classifyRepoPromptType(tag, attrs);
 
     const meta: XmlNodeMeta = {
       id: path,
@@ -217,6 +219,7 @@ function buildMetaTreeFromFxp(
       kind,
       charCount,
       hash,
+      rpType,
       children,
     };
 
@@ -343,6 +346,7 @@ async function parseWithSaxes(xml: string, options: { preserveAttrs: boolean; na
     const hash = hashStringSync(`${stableAttrString(frame.attrs)}|${text}`);
 
     const kind = classifyKind(frame.tag, text, frame.children.length);
+    const rpType = classifyRepoPromptType(frame.tag, frame.attrs);
 
     const node: XmlNodeMeta = {
       id: frame.path,
@@ -352,6 +356,7 @@ async function parseWithSaxes(xml: string, options: { preserveAttrs: boolean; na
       kind,
       charCount,
       hash,
+      rpType,
       children: frame.children.length > 0 ? frame.children : undefined,
     };
 

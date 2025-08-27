@@ -44,6 +44,9 @@ interface AppState {
   zoomPath: string[];
   breadcrumbs: string[];
   
+  // UI flags
+  legendPinned: boolean;
+  
   // Search
   searchQuery: string;
   searchResults: SearchResult[];
@@ -92,6 +95,9 @@ interface AppState {
     // Performance actions
     updatePerformanceConfig: (config: Partial<PerformanceConfig>) => void;
     
+    // UI actions
+    setLegendPinned: (pinned: boolean) => void;
+    
     // Theme actions
     setTheme: (theme: 'light' | 'dark' | 'high-contrast') => void;
     
@@ -119,6 +125,7 @@ const initialState = {
   tokenCache: {},
   zoomPath: [],
   breadcrumbs: ['root'],
+  legendPinned: false,
   searchQuery: '',
   searchResults: [],
   performanceConfig: initialPerformanceConfig,
@@ -198,6 +205,9 @@ export const useStore = create<AppState>()(
         updatePerformanceConfig: (config) => set((state) => ({
           performanceConfig: { ...state.performanceConfig, ...config }
         })),
+        
+        // UI actions
+        setLegendPinned: (pinned) => set({ legendPinned: pinned }),
         
         // Theme actions
         setTheme: (theme) => {

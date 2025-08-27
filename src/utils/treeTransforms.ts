@@ -5,6 +5,7 @@ import type {
   SizeBasis,
   ModelId,
 } from '@/types/models';
+import { classifyRepoPromptType } from '@/utils/semantic';
 
 type NodeStats = {
   valueChars: number;
@@ -189,6 +190,8 @@ function buildPromptNode(
   const attrsOut: Record<string, string> = meta.attrs ? { ...meta.attrs } : {};
   attrsOut['__tag'] = meta.tag;
   attrsOut['__group'] = groupKey(meta.attrs, meta.path, meta.tag);
+  const semType = meta.rpType ?? classifyRepoPromptType(meta.tag, meta.attrs);
+  attrsOut['__semType'] = semType;
 
   const node: PromptNode = {
     id: meta.id,
@@ -198,6 +201,7 @@ function buildPromptNode(
     path: meta.path,
     content: makePreview(meta, state.previewLength),
     attributes: attrsOut,
+    semanticType: semType,
     children: [],
   };
 
@@ -290,7 +294,8 @@ function buildPromptNode(
       totalValue: aggTotalInBasis,
       path: `${meta.path}/other`,
       content: undefined,
-      attributes: {},
+      attributes: { __semType: 'other' },
+      semanticType: 'other',
       children: [], // deferred; expanded on zoom by rebuilding at a deeper level
     };
 

@@ -24,37 +24,33 @@ export default function ViewModeToggle() {
   const setType = (type: VisualizationType) => () => setChartType(type);
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Chart Type selector */}
-      <div className="flex flex-col">
-        <label className="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Chart Type</label>
-        <div role="group" aria-label="Chart type" className="inline-flex rounded-md shadow-sm border border-gray-300 overflow-hidden dark:border-gray-600">
-          <button
-            type="button"
-            className={`${btnBase} ${chartType === 'sunburst' ? selected : unselected}`}
-            aria-pressed={chartType === 'sunburst'}
-            aria-label="Sunburst chart"
-            onClick={setType('sunburst')}
-          >
-            Sunburst
-          </button>
-          <button
-            type="button"
-            className={`${btnBase} ${chartType === 'icicle' ? selected : unselected}`}
-            aria-pressed={chartType === 'icicle'}
-            aria-label="Icicle chart"
-            onClick={setType('icicle')}
-          >
-            Icicle
-          </button>
-        </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <span id="chart-type-label" className="sr-only">Chart Type</span>
+      <div role="group" aria-labelledby="chart-type-label" className="inline-flex rounded-md shadow-sm border border-gray-300 overflow-hidden dark:border-gray-600">
+        <button
+          type="button"
+          className={`${btnBase} ${chartType === 'sunburst' ? selected : unselected}`}
+          aria-pressed={chartType === 'sunburst'}
+          aria-label="Sunburst chart"
+          onClick={setType('sunburst')}
+        >
+          Sunburst
+        </button>
+        <button
+          type="button"
+          className={`${btnBase} ${chartType === 'icicle' ? selected : unselected}`}
+          aria-pressed={chartType === 'icicle'}
+          aria-label="Icicle chart"
+          onClick={setType('icicle')}
+        >
+          Icicle
+        </button>
       </div>
 
-      {/* View Mode selector (only when absolute mode is meaningful) */}
       {hasAbsolute && (
-        <div className="flex flex-col">
-          <label className="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">View Mode</label>
-          <div role="group" aria-label="View mode" className="inline-flex rounded-md shadow-sm border border-gray-300 overflow-hidden dark:border-gray-600">
+        <>
+          <span id="view-mode-label" className="sr-only">View Mode</span>
+          <div role="group" aria-labelledby="view-mode-label" className="inline-flex rounded-md shadow-sm border border-gray-300 overflow-hidden dark:border-gray-600">
             <button
               type="button"
               className={`${btnBase} ${viewMode === 'absolute' ? selected : unselected}`}
@@ -74,10 +70,7 @@ export default function ViewModeToggle() {
               Relative
             </button>
           </div>
-          <span className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Absolute shows usage vs model context; Relative normalizes the chart.
-          </span>
-        </div>
+        </>
       )}
     </div>
   );
