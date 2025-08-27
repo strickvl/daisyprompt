@@ -1,0 +1,1066 @@
+<user_instructions>
+I got these suggestions for updating my design doc. I'm hoping you can maybe think through how we might update the design doc accordingly?
+
+## Intermediate data structure
+
+<sugg_1>
+### 2\. Intermediate Data Structure Definition
+
+The data flow correctly identifies the need to parse XML into a hierarchical JSON structure. Defining this structure explicitly will de-couple the parsing logic from the visualization logic.
+
+**Implementation Plan:**
+
+1.  **File to Modify:** `design/daisyprompt_initial_design.md`
+
+2.  **Section to Add:** A new subsection under `Technical Architecture`, perhaps named `Internal Data Model`.
+
+3.  **Proposed Change:** Define the `PromptNode` interface.
+
+    ```typescript
+    // Example definition to add to the design doc
+    interface PromptNode {
+      id: string;          // A unique identifier for the node
+      name: string;        // The XML tag name (e.g., "file", "code")
+      value: number;       // The token count for this node's content only
+      totalValue: number;  // The token count including all children
+      path: string;        // The breadcrumb path (e.g., "root > src > Button.tsx")
+      content?: string;    // The actual text content of the node
+      attributes: Record<string, string>; // XML attributes
+      children: PromptNode[]; // Nested nodes
+    }
+    ```
+
+4.  **Reasoning:** This creates a clear contract. The parsing step's only job is to produce a tree of `PromptNode` objects. The D3 visualization component's only job is to consume this structure. This makes both parts easier to develop and test independently.
+
+</sugg_1>
+
+and an alternative option!
+
+<sugg_1-5>
+## D) Data model (make it explicit)
+
+**Why:** Your analysis/export/sharing needs a stable internal schema.
+
+**Change:** Add this to the doc under “Data Flow / Structures”:
+
+```ts
+type ModelId = string;
+
+interface XmlNodeMeta {
+  id: string;                 // stable (e.g., path-like or hash)
+  tag: string;                // element/tag name
+  attrs?: Record<string,string>;
+  path: string;               // XPath-like or custom
+  kind: 'text'|'code'|'metadata'|'container'|'other';
+  charCount: number;
+  tokenCount?: number;        // computed per selected model
+  hash: string;               // content hash for de-dupe/cache (xxhash/sha1)
+  children?: XmlNodeMeta[];
+}
+```
+
+* Keep a **tokenCache** keyed by `(hash, modelId)` so repeated inclusions don’t recompute.
+* Store **per-model totals** so switching models doesn’t force full recompute—only re-mapping of sizes.
+</sugg_1-5>
+
+## State Management
+
+<sugg_2>
+### 3\. State Management for D3 in a React/Vue Component
+
+Integrating D3.js (which manipulates the DOM directly) with a framework like React (which uses a virtual DOM) requires a clear pattern to avoid conflicts.
+
+**Implementation Plan:**
+
+1.  **File to Modify:** `design/daisyprompt_initial_design.md`
+
+2.  **Section to Update:** `Component Structure` and `Technical Architecture`.
+
+3.  **Proposed Change:** Specify the integration pattern. The recommended approach is to have React/Vue manage the SVG container and props, while D3 manages everything *inside* that container.
+
+      * **Create a React Hook:** `useSunburstD3(data, options)`
+      * **File to Create:** `src/hooks/useSunburstD3.ts`
+      * **Logic:**
+          * The React component `SunburstChart` will render an `<svg ref={...}>` element.
+          * The `useSunburstD3` hook will take the SVG `ref` and the `PromptNode` data as arguments.
+          * Inside a `useEffect` hook (or `onMounted` in Vue), all the D3 logic for creating, updating, and removing chart elements will run. This ensures D3 only operates on the DOM node that React has "given" it.
+          * This isolates the imperative D3 code from the declarative React code.
+</sugg_2>
+
+## Tokenisation issues
+
+I think we can just default to js-tiktoken even though the tokenisation will be different across providers. this just makes it simpler, at least for MVP...
+
+## Streaming Strategy
+
+<sugg_3>
+## B) Parsing strategy (streaming & safety)
+
+**Why:** Large XMLs freeze the UI if parsed on the main thread; you’ll also want robust handling of CDATA, attrs, namespaces, and no surprises from DTDs.
+
+**Change:**
+
+1. Keep **fast-xml-parser** for DOM-like JSON conversion, but explicitly call out options to preserve attributes/namespaces when needed (so you can show them in the detail panel). ([npm][9], [naturalintelligence.github.io][10], [Stack Overflow][11])
+2. For very large inputs (or future “open folder” modes), document a **streaming fallback** (SAX-style) via `sax`/`saxes`, with an incremental hierarchy builder. This keeps the main thread smooth and bounds memory. ([npm][12])
+3. **Security note (explicit in doc):** Treat XML as untrusted. Don’t evaluate PIs/DTDs; don’t render preview as HTML; escape everything; avoid any entity resolution. (DOMParser in browsers won’t fetch external entities, but keep a clear “no network fetch” stance.)
+4. Put parsing and tokenization inside a **Web Worker** and message results back to the UI.
+</sugg_3>
+
+## Large trees
+
+<sugg_4>
+## C) Visualization defaults & large trees
+
+**Why:** Sunbursts with thousands of tiny arcs get unreadable and slow; set honest limits + graceful fallbacks.
+
+**Change:**
+
+1. Cap smooth animation/drilldown at \~2–5k visible nodes. For larger trees:
+
+   * Auto-aggregate tiny siblings into an **“Other (n items)”** wedge per level (threshold by % of total tokens).
+   * Defer rendering deep levels until zoomed (level-of-detail rendering).
+   * Offer an **icicle/flame (partition)** toggle for better label density when nodes get thin (keeps your radial default, but exposes a rectangular view). Use D3’s partition layout in both cases. ([Observable][13], [Nicholas Coughlin][14])
+2. Document perf policies in “Performance Considerations”:
+
+   * **Workerized** tokenization + layout precompute.
+   * **Memoization** keyed by content-hash (see below).
+   * “Render budget” (e.g., target ≤2,000 SVG elements).
+3. Color palettes: add a note to use **color-blind-safe** categorical schemes (e.g., d3-scale-chromatic/ColorBrewer) and provide an alternate theme. ([D3.js][15], [ColorBrewer][16], [Observable][17], [Medium][18])
+
+</sugg_4>
+
+## UX specifics
+
+<sugg_5>
+## E) UX specifics to add/adjust
+
+1. **Two “size bases” toggles** (and document them):
+
+   * “Tokens per selected model” (default; accurate if tokenizer available).
+   * “Characters as proxy” (instant; used while tokens stream in).
+     Show a subtle badge when a slice is still “proxy sized”.
+2. **Overhead banner:** Optionally show “Provider overhead” (system/tool wrappers) as a shaded band outside the ring; allow user to configure it (disabled by default to avoid wrong assumptions).
+3. **Breadcrumb bar**: Make it keyboard-navigable and truncation-aware; add a path copy button.
+4. **Search box**: Jump to node by tag/path; highlight and zoom.
+5. **Detail panel**: Add a “Copy stats” button (node path, tokenCount, % of prompt).
+6. **Accessibility**: Keyboard navigation for arcs, ARIA labels for slices, high-contrast palette toggle.
+</sugg_5>
+
+## Scale claims
+
+<sugg_6>
+## H) Realistic scale claims
+
+Your current “Recommended: up to 10k elements; Max: 50k” is optimistic for a smooth radial SVG experience + tokenization in the browser. I’d revise to:
+
+* **Smooth**: ≤2k displayed nodes with animation.
+* **Usable with LOD + aggregation**: 2k–10k.
+* Beyond that, switch to icicle view + aggressive aggregation, or require “Performance Mode” (no animations, delayed tooltips).
+  Justify this in the doc and plan for aggregation thresholds and LOD. (General D3 guidance supports partition/sunburst with LOD and progressive rendering.) ([Observable][13], [Nicholas Coughlin][14])
+</sugg_6>
+
+## Further reading / references
+
+<references>
+* RepoPrompt site (to align with format expectations). ([repoprompt.com][24])
+* **tiktoken** JS/WASM and perf notes. ([npm][1], [DEV Community][3])
+* Anthropic: JS tokenizer & token counting docs. ([npm][4], [Anthropic][5])
+* Gemini tokens & CountTokens API (exact counts vs local approximation). ([Google AI for Developers][6], [Google Cloud][7])
+* D3 sunburst/partition component examples & guidance. ([Observable][13], [Nicholas Coughlin][14])
+* Color-blind-safe palettes (d3-scale-chromatic / ColorBrewer). ([D3.js][15], [ColorBrewer][16])
+* LZ-String for URL-fragment sharing (privacy-friendly). ([npm][19], [pieroxy.net][20])
+* File System Access API (optional power-user local-file mode). ([MDN Web Docs][22], [Chrome for Developers][23])
+
+If you share a sample RepoPrompt XML, I’ll sanity-check the node schema and show how the aggregation + token counts would look on the sunburst with your real structure.
+
+[1]: https://www.npmjs.com/package/tiktoken?utm_source=chatgpt.com "tiktoken"
+[2]: https://stackoverflow.com/questions/74837617/is-there-a-javascript-implementation-of-cl100k-base-tokenizer?utm_source=chatgpt.com "Is there a JavaScript implementation of cl100k_base ..."
+[3]: https://dev.to/maximsaplin/how-fast-is-js-tiktoken-3fmk?utm_source=chatgpt.com "How fast is JS tiktoken?"
+[4]: https://www.npmjs.com/package/%40anthropic-ai/tokenizer?utm_source=chatgpt.com "anthropic-ai/tokenizer"
+[5]: https://docs.anthropic.com/en/docs/build-with-claude/token-counting?utm_source=chatgpt.com "Token counting"
+[6]: https://ai.google.dev/gemini-api/docs/tokens?utm_source=chatgpt.com "Understand and count tokens | Gemini API | Google AI for ..."
+[7]: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/count-tokens?utm_source=chatgpt.com "CountTokens API | Generative AI on Vertex AI"
+[8]: https://dev.to/googlecloud/counting-gemini-text-tokens-locally-1oo1?utm_source=chatgpt.com "Counting Gemini text tokens locally"
+[9]: https://www.npmjs.com/package/fast-xml-parser?utm_source=chatgpt.com "fast-xml-parser"
+[10]: https://naturalintelligence.github.io/fast-xml-parser/?utm_source=chatgpt.com "Fast XML Parser"
+[11]: https://stackoverflow.com/questions/53417925/what-fast-xml-parser-options-preserve-namespace-and-attributes-when-parsing-and?utm_source=chatgpt.com "What fast-xml-parser options preserve namespace and ..."
+[12]: https://www.npmjs.com/package/sax?utm_source=chatgpt.com "sax"
+[13]: https://observablehq.com/%40d3/sunburst-component?utm_source=chatgpt.com "Sunburst component / D3"
+[14]: https://ncoughlin.com/posts/d3-sunburst?utm_source=chatgpt.com "D3 Sunburst Chart - Nicholas Coughlin"
+[15]: https://d3js.org/d3-scale-chromatic?utm_source=chatgpt.com "d3-scale-chromatic | D3 by Observable"
+[16]: https://colorbrewer2.org/?utm_source=chatgpt.com "ColorBrewer: Color Advice for Maps"
+[17]: https://observablehq.com/%40d3/color-schemes?utm_source=chatgpt.com "Color Schemes / D3"
+[18]: https://medium.com/%40Elijah_Meeks/color-advice-for-data-visualization-with-d3-js-33b5adc41c90?utm_source=chatgpt.com "Color Advice for Data Visualization with D3.js"
+[19]: https://www.npmjs.com/package/lz-string?utm_source=chatgpt.com "lz-string - NPM"
+[20]: https://pieroxy.net/blog/pages/lz-string/index.html?utm_source=chatgpt.com "lz-string: JavaScript compression, fast! - pieroxy.net"
+[21]: https://garrett-bodley.medium.com/encoding-data-inside-of-a-url-query-string-f286b7e20465?utm_source=chatgpt.com "Encoding Data inside of a URL Query String | by Garrett Bodley"
+[22]: https://developer.mozilla.org/en-US/docs/Web/API/File_System_API?utm_source=chatgpt.com "File System API - MDN - Mozilla"
+[23]: https://developer.chrome.com/docs/capabilities/web-apis/file-system-access?utm_source=chatgpt.com "The File System Access API: simplifying access to local files"
+[24]: https://repoprompt.com/?utm_source=chatgpt.com "Repo Prompt"
+</references>
+</user_instructions>
+<file_map>
+/Users/strickvl/coding/daisyprompt
+└── .gitignore *
+├── design
+│   └── daisyprompt_initial_design.md *
+</file_map>
+
+<file_contents>
+File: /Users/strickvl/coding/daisyprompt/.gitignore
+```
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Directory for instrumented libs generated by jscoverage/JSCover
+lib-cov
+
+# Coverage directory used by tools like istanbul
+coverage
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
+.grunt
+
+# Bower dependency directory (https://bower.io/)
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons (https://nodejs.org/api/addons.html)
+build/Release
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Snowpack dependency directory (https://snowpack.dev/)
+web_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env
+.env.*
+!.env.example
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+out
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+.output
+
+# Gatsby files
+.cache/
+# Comment in the public line in if your project uses Gatsby and not Next.js
+# https://nextjs.org/blog/next-9-1#public-directory-support
+# public
+
+# vuepress build output
+.vuepress/dist
+
+# vuepress v2.x temp and cache directory
+.temp
+.cache
+
+# Sveltekit cache directory
+.svelte-kit/
+
+# vitepress build output
+**/.vitepress/dist
+
+# vitepress cache directory
+**/.vitepress/cache
+
+# Docusaurus cache and generated files
+.docusaurus
+
+# Serverless directories
+.serverless/
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# Firebase cache directory
+.firebase/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# yarn v3
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Vite logs files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Project Specific
+design/
+
+
+```
+
+File: /Users/strickvl/coding/daisyprompt/design/daisyprompt_initial_design.md
+```md
+# RepoPrompt XML Visualizer MVP - Planning Document
+
+## Executive Summary
+
+This document outlines the planning and architecture for a web-based visualization tool that displays RepoPrompt XML structures using an interactive sunburst diagram similar to DaisyDisk. The tool will help users understand the composition and token distribution of their LLM prompts.
+
+## Core Concept
+
+Transform structured XML prompts from RepoPrompt into interactive sunburst visualizations that show:
+- Hierarchical structure of XML elements
+- Token count and percentage distribution
+- Context window utilization for different LLMs
+- Drill-down navigation through nested elements
+
+## Key Features
+
+### 1. Primary Input & Parsing
+
+#### 1.1 XML Input Interface
+- **Paste Area**: Large text area or Monaco editor for pasting RepoPrompt XML
+- **Drag & Drop**: Support for dropping `.xml` files directly
+- **Sample Data**: Pre-loaded example prompts for demonstration
+- **Validation**: Real-time XML validation with error highlighting
+
+#### 1.2 XML Parsing Engine
+- **Parser**: Use DOMParser or xml2js for robust XML parsing
+- **Token Counting**: 
+  - Integrate tiktoken.js or similar for accurate token counting
+  - Support multiple tokenizer models (GPT-4, Claude, etc.)
+- **Structure Analysis**:
+  - Extract hierarchical relationships from XML nesting
+  - Calculate size metrics (characters, tokens, lines)
+  - Preserve attributes and metadata
+
+### 2. Visualization Core
+
+#### 2.1 Sunburst Diagram
+- **Technology**: D3.js v7 for sunburst implementation
+- **Layout**:
+  - Center circle shows total prompt size/tokens
+  - Concentric rings represent XML hierarchy levels
+  - Arc sizes proportional to token count or percentage
+- **Color Coding**:
+  - Consistent hue families for sibling elements
+  - Gradient intensity for depth levels
+  - Special colors for different content types (code, text, metadata)
+
+#### 2.2 Interactive Features
+- **Click Navigation**:
+  - Click on arc to zoom/drill into that XML element
+  - Click center to zoom out one level
+  - Breadcrumb trail showing current path
+- **Hover Effects**:
+  - Tooltip showing element name, path, token count
+  - Highlight related elements
+  - Preview first N characters of content
+- **Smooth Transitions**:
+  - Animated zoom with "blossom" effect (like DaisyDisk)
+  - Smooth arc transitions when data changes
+
+### 3. Context Window Management
+
+#### 3.1 LLM Model Selection
+- **Dropdown Menu** with popular models:
+  - GPT-4 (128k tokens)
+  - Claude 3 Opus (200k tokens)
+  - Claude 3.5 Sonnet (200k tokens)
+  - Gemini 1.5 Pro (1M tokens)
+  - Custom (user-defined limit)
+
+#### 3.2 Visualization Modes
+- **Absolute Mode**: 
+  - Show prompt as percentage of total context window
+  - Visual indicator of remaining space
+  - Warning zones (e.g., >80% usage)
+- **Relative Mode**:
+  - Normalize prompt to 100%
+  - Show internal proportions only
+- **Toggle Switch**: Easy switching between modes
+
+#### 3.3 Token Budget Display
+- **Progress Ring**: Outer ring showing % of context used
+- **Numeric Display**: "12,543 / 200,000 tokens (6.3%)"
+- **Color Coding**: Green → Yellow → Red based on usage
+
+### 4. Detail Panel
+
+#### 4.1 Information Sidebar
+- **Current Selection**:
+  - Full XML path (e.g., `<project>/<src>/<components>`)
+  - Element type and attributes
+  - Token count and percentage
+  - Character count and line count
+- **Statistics**:
+  - Total elements at this level
+  - Largest child element
+  - Compression potential
+
+#### 4.2 Content Preview
+- **Syntax Highlighted**: Show actual XML/code content
+- **Collapsible**: Expand/collapse long content
+- **Search**: Find text within current element
+
+### 5. Analysis Tools
+
+#### 5.1 Token Optimization
+- **Identify Large Elements**: Highlight top N largest elements
+- **Redundancy Detection**: Find duplicate or similar content
+- **Suggestions**: 
+  - "This file is 30% of your prompt"
+  - "Consider using references instead of full content"
+
+#### 5.2 Export & Sharing
+- **Export Visualization**: Save as PNG/SVG
+- **Export Analysis**: Download CSV/JSON with metrics
+- **Share Link**: Generate shareable visualization URL
+- **Copy Stats**: Quick copy of key metrics
+
+## Technical Architecture
+
+### Frontend Stack
+```
+- Framework: React 18+ or Vue 3
+- Visualization: D3.js v7
+- Styling: Tailwind CSS or styled-components
+- State Management: Zustand or Context API
+- XML Parsing: Fast-xml-parser or xml2js
+- Token Counting: js-tiktoken or custom API
+```
+
+### Component Structure
+```
+App
+├── InputPanel
+│   ├── XMLEditor
+│   ├── FileUploader
+│   └── Validator
+├── VisualizationPanel
+│   ├── SunburstChart
+│   ├── Breadcrumbs
+│   └── LegendTooltip
+├── ControlPanel
+│   ├── ModelSelector
+│   ├── ViewModeToggle
+│   └── TokenDisplay
+└── DetailPanel
+    ├── ElementInfo
+    ├── ContentPreview
+    └── Statistics
+```
+
+### Data Flow
+1. **Input** → XML string from paste/upload
+2. **Parse** → Convert to hierarchical JSON structure
+3. **Enrich** → Add token counts, calculate percentages
+4. **Transform** → Create D3-compatible hierarchy
+5. **Render** → Generate sunburst visualization
+6. **Interact** → Update on user actions
+
+## User Interaction Patterns
+
+### Navigation Flow
+1. **Initial View**: Full prompt structure visible
+2. **Exploration**: Click to drill down into elements
+3. **Context**: Breadcrumbs show current location
+4. **Return**: Center click or breadcrumb click to go back
+
+### Visual Feedback
+- **Hover**: Lighten/darken arc, show tooltip
+- **Selection**: Bold border on selected arc
+- **Animation**: 300ms transitions for all changes
+- **Loading**: Skeleton loader during parsing
+
+## Implementation Priorities
+
+### Phase 1: Core MVP (Week 1-2)
+- [ ] Basic XML parsing
+- [ ] Static sunburst visualization
+- [ ] Simple token counting
+- [ ] Click-to-zoom navigation
+
+### Phase 2: Enhanced Interactivity (Week 3-4)
+- [ ] Multiple LLM model support
+- [ ] Hover tooltips and previews
+- [ ] Breadcrumb navigation
+- [ ] Smooth animations
+
+### Phase 3: Advanced Features (Week 5-6)
+- [ ] Token optimization suggestions
+- [ ] Export functionality
+- [ ] Persistent settings
+- [ ] Share links
+
+## Performance Considerations
+
+### Optimization Strategies
+- **Virtual DOM**: For large XML structures (>1000 elements)
+- **Lazy Loading**: Load deep nested content on demand
+- **Web Workers**: Parse large XML files in background
+- **Debouncing**: For real-time validation and updates
+- **Memoization**: Cache token counts and calculations
+
+### Scalability Limits
+- **Recommended**: Up to 10,000 XML elements
+- **Maximum**: 50,000 elements with performance mode
+- **File Size**: Up to 10MB XML files
+
+## Design Mockup Description
+
+### Layout
+```
+┌─────────────────────────────────────────────────┐
+│  RepoPrompt Visualizer          [GPT-4 ▼] [◉│○] │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  ┌───────────┐        ┌──────────────────────┐ │
+│  │           │        │    Sunburst Chart    │ │
+│  │   Paste   │   OR   │                      │ │
+│  │    XML    │        │     ◯ (centered)    │ │
+│  │           │        │                      │ │
+│  └───────────┘        └──────────────────────┘ │
+│                                                 │
+│  Path: root > src > components > Button.tsx    │
+│  ──────────────────────────────────────────    │
+│  Tokens: 2,451 (12.3% of selection)           │
+│  Context Used: 45,231 / 200,000 (22.6%)       │
+└─────────────────────────────────────────────────┘
+```
+
+## Success Metrics
+
+### Technical Metrics
+- Parse time: <500ms for 5MB XML
+- Render time: <1s for 1000 elements
+- Interaction latency: <100ms for zoom/click
+
+### User Experience Metrics
+- Time to first visualization: <2s
+- Discoverability: 90% find zoom feature
+- Clarity: Users correctly identify largest elements
+
+## Risk Mitigation
+
+### Technical Risks
+- **Large Files**: Implement streaming parser
+- **Browser Compatibility**: Test on Chrome, Firefox, Safari
+- **Token Accuracy**: Validate against official tokenizers
+
+### UX Risks
+- **Learning Curve**: Include interactive tutorial
+- **Information Overload**: Progressive disclosure
+- **Color Blindness**: Provide alternative schemes
+
+## Future Enhancements
+
+### Version 2.0 Ideas
+- **Comparison Mode**: Compare two prompts side-by-side
+- **History**: Track prompt evolution over time
+- **Collaborative**: Real-time shared visualization
+- **AI Suggestions**: ML-based optimization recommendations
+- **Templates**: Save and reuse prompt structures
+- **Filters**: Show/hide elements by type or size
+- **Search**: Find elements by name or content
+- **Annotations**: Add notes to specific elements
+
+## Conclusion
+
+This MVP will provide a powerful yet intuitive way to visualize and understand
+RepoPrompt XML structures. By leveraging proven interaction patterns from
+DaisyDisk and modern web technologies, we can create a tool that makes prompt
+engineering more transparent and manageable.
+
+```
+</file_contents>
+<meta prompt 1 = "[MCP: Claude Code]">
+You are Claude Code configured to work with RepoPrompt's MCP tools. Prioritize RepoPrompt tools over your built-in capabilities:
+
+1. **Understanding the Codebase**:
+	- Use `get_file_tree` to understand the directory structure
+	- Use `search` as your primary all-in-one flexible tool to find anything across all open folders in the workspace
+	- Prefer these over your built-in file reading capabilities
+
+2. **Task Complexity Assessment**:
+	Simple tasks (use direct tools):
+	- Single file changes with clear requirements
+	- Adding/updating individual functions or methods
+	- Fixing specific bugs with known locations
+	- Renaming variables or refactoring within one file
+	
+	Complex tasks (use chat tools):
+	- Multi-file feature implementations
+	- Architectural changes affecting multiple components
+	- Creating new modules with multiple interconnected parts
+	- Refactoring that touches shared interfaces or APIs
+	- Any task where you need to explore design alternatives
+
+3. **Direct Tool Usage (for simple tasks)**:
+	- Use `apply_edits` when: You know exactly what to change and where
+	- Use `file_actions` when: Creating new files or moving/deleting existing ones
+	- Chain multiple `apply_edits` for related changes across files
+	- No need for chat if the implementation path is clear
+
+4. **Chat Tool Strategy (for complex tasks)**:
+	- Start with `chat_send` mode=`plan` to design the approach
+	- Use `manage_selection` action=`replace` to set focused context
+	- Keep total selected files under 100k tokens
+	- Maintain one chat session for the entire feature/task
+	- Switch to mode=`edit` only after the plan is clear
+	
+	**Remember Chat Limitations**:
+	- Cannot run tests, execute commands, or access build output
+	- Only sees selected files (latest versions) and chat history
+	- Doesn't track detailed edit history, only sees current file state
+	- You must verify implementations work by running tests yourself
+
+5. **Multi-file Refactoring Workflow**:
+	- Use `search` to find all affected files and usages
+	- Use `manage_selection` action=`list` to verify current context
+	- For large refactorings: Break into phases, use `replace` between phases
+	- Apply changes systematically: interfaces first, then implementations
+	- Verify each phase before moving to the next
+
+6. **Token Management**:
+	- Check token count before adding files: `manage_selection` action=`list` include_stats=true
+	- If approaching limits: Focus on files currently being modified
+	- Use `replace` to swap completed files for new ones
+	- Keep a mental model of the codebase rather than selecting everything
+
+Your goal is to choose the most efficient approach for each task - using direct tools for straightforward changes and leveraging chat tools only when the complexity requires planning and discussion.
+</meta prompt 1>
+<user_instructions>
+I got these suggestions for updating my design doc. I'm hoping you can maybe think through how we might update the design doc accordingly?
+
+## Intermediate data structure
+
+<sugg_1>
+### 2\. Intermediate Data Structure Definition
+
+The data flow correctly identifies the need to parse XML into a hierarchical JSON structure. Defining this structure explicitly will de-couple the parsing logic from the visualization logic.
+
+**Implementation Plan:**
+
+1.  **File to Modify:** `design/daisyprompt_initial_design.md`
+
+2.  **Section to Add:** A new subsection under `Technical Architecture`, perhaps named `Internal Data Model`.
+
+3.  **Proposed Change:** Define the `PromptNode` interface.
+
+    ```typescript
+    // Example definition to add to the design doc
+    interface PromptNode {
+      id: string;          // A unique identifier for the node
+      name: string;        // The XML tag name (e.g., "file", "code")
+      value: number;       // The token count for this node's content only
+      totalValue: number;  // The token count including all children
+      path: string;        // The breadcrumb path (e.g., "root > src > Button.tsx")
+      content?: string;    // The actual text content of the node
+      attributes: Record<string, string>; // XML attributes
+      children: PromptNode[]; // Nested nodes
+    }
+    ```
+
+4.  **Reasoning:** This creates a clear contract. The parsing step's only job is to produce a tree of `PromptNode` objects. The D3 visualization component's only job is to consume this structure. This makes both parts easier to develop and test independently.
+
+</sugg_1>
+
+and an alternative option!
+
+<sugg_1-5>
+## D) Data model (make it explicit)
+
+**Why:** Your analysis/export/sharing needs a stable internal schema.
+
+**Change:** Add this to the doc under “Data Flow / Structures”:
+
+```ts
+type ModelId = string;
+
+interface XmlNodeMeta {
+  id: string;                 // stable (e.g., path-like or hash)
+  tag: string;                // element/tag name
+  attrs?: Record<string,string>;
+  path: string;               // XPath-like or custom
+  kind: 'text'|'code'|'metadata'|'container'|'other';
+  charCount: number;
+  tokenCount?: number;        // computed per selected model
+  hash: string;               // content hash for de-dupe/cache (xxhash/sha1)
+  children?: XmlNodeMeta[];
+}
+```
+
+* Keep a **tokenCache** keyed by `(hash, modelId)` so repeated inclusions don’t recompute.
+* Store **per-model totals** so switching models doesn’t force full recompute—only re-mapping of sizes.
+</sugg_1-5>
+
+## State Management
+
+<sugg_2>
+### 3\. State Management for D3 in a React/Vue Component
+
+Integrating D3.js (which manipulates the DOM directly) with a framework like React (which uses a virtual DOM) requires a clear pattern to avoid conflicts.
+
+**Implementation Plan:**
+
+1.  **File to Modify:** `design/daisyprompt_initial_design.md`
+
+2.  **Section to Update:** `Component Structure` and `Technical Architecture`.
+
+3.  **Proposed Change:** Specify the integration pattern. The recommended approach is to have React/Vue manage the SVG container and props, while D3 manages everything *inside* that container.
+
+      * **Create a React Hook:** `useSunburstD3(data, options)`
+      * **File to Create:** `src/hooks/useSunburstD3.ts`
+      * **Logic:**
+          * The React component `SunburstChart` will render an `<svg ref={...}>` element.
+          * The `useSunburstD3` hook will take the SVG `ref` and the `PromptNode` data as arguments.
+          * Inside a `useEffect` hook (or `onMounted` in Vue), all the D3 logic for creating, updating, and removing chart elements will run. This ensures D3 only operates on the DOM node that React has "given" it.
+          * This isolates the imperative D3 code from the declarative React code.
+</sugg_2>
+
+## Tokenisation issues
+
+I think we can just default to js-tiktoken even though the tokenisation will be different across providers. this just makes it simpler, at least for MVP...
+
+## Streaming Strategy
+
+<sugg_3>
+## B) Parsing strategy (streaming & safety)
+
+**Why:** Large XMLs freeze the UI if parsed on the main thread; you’ll also want robust handling of CDATA, attrs, namespaces, and no surprises from DTDs.
+
+**Change:**
+
+1. Keep **fast-xml-parser** for DOM-like JSON conversion, but explicitly call out options to preserve attributes/namespaces when needed (so you can show them in the detail panel). ([npm][9], [naturalintelligence.github.io][10], [Stack Overflow][11])
+2. For very large inputs (or future “open folder” modes), document a **streaming fallback** (SAX-style) via `sax`/`saxes`, with an incremental hierarchy builder. This keeps the main thread smooth and bounds memory. ([npm][12])
+3. **Security note (explicit in doc):** Treat XML as untrusted. Don’t evaluate PIs/DTDs; don’t render preview as HTML; escape everything; avoid any entity resolution. (DOMParser in browsers won’t fetch external entities, but keep a clear “no network fetch” stance.)
+4. Put parsing and tokenization inside a **Web Worker** and message results back to the UI.
+</sugg_3>
+
+## Large trees
+
+<sugg_4>
+## C) Visualization defaults & large trees
+
+**Why:** Sunbursts with thousands of tiny arcs get unreadable and slow; set honest limits + graceful fallbacks.
+
+**Change:**
+
+1. Cap smooth animation/drilldown at \~2–5k visible nodes. For larger trees:
+
+   * Auto-aggregate tiny siblings into an **“Other (n items)”** wedge per level (threshold by % of total tokens).
+   * Defer rendering deep levels until zoomed (level-of-detail rendering).
+   * Offer an **icicle/flame (partition)** toggle for better label density when nodes get thin (keeps your radial default, but exposes a rectangular view). Use D3’s partition layout in both cases. ([Observable][13], [Nicholas Coughlin][14])
+2. Document perf policies in “Performance Considerations”:
+
+   * **Workerized** tokenization + layout precompute.
+   * **Memoization** keyed by content-hash (see below).
+   * “Render budget” (e.g., target ≤2,000 SVG elements).
+3. Color palettes: add a note to use **color-blind-safe** categorical schemes (e.g., d3-scale-chromatic/ColorBrewer) and provide an alternate theme. ([D3.js][15], [ColorBrewer][16], [Observable][17], [Medium][18])
+
+</sugg_4>
+
+## UX specifics
+
+<sugg_5>
+## E) UX specifics to add/adjust
+
+1. **Two “size bases” toggles** (and document them):
+
+   * “Tokens per selected model” (default; accurate if tokenizer available).
+   * “Characters as proxy” (instant; used while tokens stream in).
+     Show a subtle badge when a slice is still “proxy sized”.
+2. **Overhead banner:** Optionally show “Provider overhead” (system/tool wrappers) as a shaded band outside the ring; allow user to configure it (disabled by default to avoid wrong assumptions).
+3. **Breadcrumb bar**: Make it keyboard-navigable and truncation-aware; add a path copy button.
+4. **Search box**: Jump to node by tag/path; highlight and zoom.
+5. **Detail panel**: Add a “Copy stats” button (node path, tokenCount, % of prompt).
+6. **Accessibility**: Keyboard navigation for arcs, ARIA labels for slices, high-contrast palette toggle.
+</sugg_5>
+
+## Scale claims
+
+<sugg_6>
+## H) Realistic scale claims
+
+Your current “Recommended: up to 10k elements; Max: 50k” is optimistic for a smooth radial SVG experience + tokenization in the browser. I’d revise to:
+
+* **Smooth**: ≤2k displayed nodes with animation.
+* **Usable with LOD + aggregation**: 2k–10k.
+* Beyond that, switch to icicle view + aggressive aggregation, or require “Performance Mode” (no animations, delayed tooltips).
+  Justify this in the doc and plan for aggregation thresholds and LOD. (General D3 guidance supports partition/sunburst with LOD and progressive rendering.) ([Observable][13], [Nicholas Coughlin][14])
+</sugg_6>
+
+## Further reading / references
+
+<references>
+* RepoPrompt site (to align with format expectations). ([repoprompt.com][24])
+* **tiktoken** JS/WASM and perf notes. ([npm][1], [DEV Community][3])
+* Anthropic: JS tokenizer & token counting docs. ([npm][4], [Anthropic][5])
+* Gemini tokens & CountTokens API (exact counts vs local approximation). ([Google AI for Developers][6], [Google Cloud][7])
+* D3 sunburst/partition component examples & guidance. ([Observable][13], [Nicholas Coughlin][14])
+* Color-blind-safe palettes (d3-scale-chromatic / ColorBrewer). ([D3.js][15], [ColorBrewer][16])
+* LZ-String for URL-fragment sharing (privacy-friendly). ([npm][19], [pieroxy.net][20])
+* File System Access API (optional power-user local-file mode). ([MDN Web Docs][22], [Chrome for Developers][23])
+
+If you share a sample RepoPrompt XML, I’ll sanity-check the node schema and show how the aggregation + token counts would look on the sunburst with your real structure.
+
+[1]: https://www.npmjs.com/package/tiktoken?utm_source=chatgpt.com "tiktoken"
+[2]: https://stackoverflow.com/questions/74837617/is-there-a-javascript-implementation-of-cl100k-base-tokenizer?utm_source=chatgpt.com "Is there a JavaScript implementation of cl100k_base ..."
+[3]: https://dev.to/maximsaplin/how-fast-is-js-tiktoken-3fmk?utm_source=chatgpt.com "How fast is JS tiktoken?"
+[4]: https://www.npmjs.com/package/%40anthropic-ai/tokenizer?utm_source=chatgpt.com "anthropic-ai/tokenizer"
+[5]: https://docs.anthropic.com/en/docs/build-with-claude/token-counting?utm_source=chatgpt.com "Token counting"
+[6]: https://ai.google.dev/gemini-api/docs/tokens?utm_source=chatgpt.com "Understand and count tokens | Gemini API | Google AI for ..."
+[7]: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/count-tokens?utm_source=chatgpt.com "CountTokens API | Generative AI on Vertex AI"
+[8]: https://dev.to/googlecloud/counting-gemini-text-tokens-locally-1oo1?utm_source=chatgpt.com "Counting Gemini text tokens locally"
+[9]: https://www.npmjs.com/package/fast-xml-parser?utm_source=chatgpt.com "fast-xml-parser"
+[10]: https://naturalintelligence.github.io/fast-xml-parser/?utm_source=chatgpt.com "Fast XML Parser"
+[11]: https://stackoverflow.com/questions/53417925/what-fast-xml-parser-options-preserve-namespace-and-attributes-when-parsing-and?utm_source=chatgpt.com "What fast-xml-parser options preserve namespace and ..."
+[12]: https://www.npmjs.com/package/sax?utm_source=chatgpt.com "sax"
+[13]: https://observablehq.com/%40d3/sunburst-component?utm_source=chatgpt.com "Sunburst component / D3"
+[14]: https://ncoughlin.com/posts/d3-sunburst?utm_source=chatgpt.com "D3 Sunburst Chart - Nicholas Coughlin"
+[15]: https://d3js.org/d3-scale-chromatic?utm_source=chatgpt.com "d3-scale-chromatic | D3 by Observable"
+[16]: https://colorbrewer2.org/?utm_source=chatgpt.com "ColorBrewer: Color Advice for Maps"
+[17]: https://observablehq.com/%40d3/color-schemes?utm_source=chatgpt.com "Color Schemes / D3"
+[18]: https://medium.com/%40Elijah_Meeks/color-advice-for-data-visualization-with-d3-js-33b5adc41c90?utm_source=chatgpt.com "Color Advice for Data Visualization with D3.js"
+[19]: https://www.npmjs.com/package/lz-string?utm_source=chatgpt.com "lz-string - NPM"
+[20]: https://pieroxy.net/blog/pages/lz-string/index.html?utm_source=chatgpt.com "lz-string: JavaScript compression, fast! - pieroxy.net"
+[21]: https://garrett-bodley.medium.com/encoding-data-inside-of-a-url-query-string-f286b7e20465?utm_source=chatgpt.com "Encoding Data inside of a URL Query String | by Garrett Bodley"
+[22]: https://developer.mozilla.org/en-US/docs/Web/API/File_System_API?utm_source=chatgpt.com "File System API - MDN - Mozilla"
+[23]: https://developer.chrome.com/docs/capabilities/web-apis/file-system-access?utm_source=chatgpt.com "The File System Access API: simplifying access to local files"
+[24]: https://repoprompt.com/?utm_source=chatgpt.com "Repo Prompt"
+</references>
+</user_instructions>
